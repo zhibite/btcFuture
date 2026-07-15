@@ -442,7 +442,8 @@ class OKXClient:
                     size: float, price: float = None,
                     reduce_only: bool = False,
                     pos_side: Optional[str] = None,
-                    direction: Optional[str] = None) -> Optional[str]:
+                    direction: Optional[str] = None,
+                    leverage: Optional[float] = None) -> Optional[str]:
         """
         下单
 
@@ -455,18 +456,25 @@ class OKXClient:
             reduce_only: 是否只平仓
             pos_side: 持仓方向 ('net' | 'long' | 'short')，按账户 posMode 自动推导
             direction: 策略方向 ('long' | 'short')，仅双向持仓模式有用
+            leverage: 杠杆倍数；模拟盘下用于按真实杠杆扣/还保证金。默认 1x。
 
         Returns:
             订单ID
         """
         if self.simulation:
             order_id = f"sim_{int(time.time() * 1000)}"
-            # 模拟更新余额
+            # 模拟更新余额：开仓按合约名义 / leverage 冻结保证金；平仓释放保证金
             size_float = float(size) if isinstance(size, str) else size
             price_float = float(price) if isinstance(price, str) else price
             cost = size_float * price_float if price_float else size_float * self.get_current_price(symbol)
-            if side == 'buy':
-                self.sim_balance -= cost / 20  # 假设20倍保证金
+            lev = leverage if leverage and leverage > 0 else 1.0
+            margin = cost / lev
+            if reduce_only:
+                # 平仓：释放冻结的保证金（盈亏由调用方在 strategy 层结算）
+                self.sim_balance += margin
+            else:
+                # 开仓/加仓：冻结保证金（无论 buy/sell，统一按持仓方向处理）
+                self.sim_balance -= margin
             return order_id
 
         resolved_pos_side = self._resolve_pos_side(

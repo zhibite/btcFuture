@@ -243,6 +243,7 @@ class MartingaleStrategy:
             order_type="market",
             size=str(contract_size),
             direction=self.config.direction,
+            leverage=self.config.leverage,
         )
 
         if order_id:
@@ -319,6 +320,7 @@ class MartingaleStrategy:
             order_type="market",
             size=str(contract_size),
             direction=self.config.direction,
+            leverage=self.config.leverage,
         )
 
         if order_id:
@@ -422,6 +424,7 @@ class MartingaleStrategy:
             size=str(close_size),
             reduce_only=True,
             direction=self.config.direction,
+            leverage=self.config.leverage,
         )
 
         if order_id:
@@ -433,8 +436,8 @@ class MartingaleStrategy:
             else:
                 profit = 0
 
-            # 扣除手续费 (约0.05%)
-            fee = self.position.total_size * self.last_price * 0.0005
+            # 扣除双边手续费 (开仓 + 平仓, 各约0.05%)
+            fee = self.position.total_size * self.last_price * 0.0005 * 2
             net_profit = profit - fee
 
             self.recorder.record_trade(
