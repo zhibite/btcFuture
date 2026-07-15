@@ -502,8 +502,15 @@ class MartingaleStrategy:
         self.logger.info(f"加仓次数: {self.position.dca_count}/{self.config.max_dca_count}")
         self.logger.info(f"当前价格: {self.last_price:.2f}")
         if self.position.avg_price > 0:
-            pnl_rate = (self.last_price - self.position.avg_price) / self.position.avg_price * 100
-            self.logger.info(f"浮动盈亏: {pnl_rate:.2f}%")
+            direction = self.config.direction
+            if direction == 'long':
+                price_diff = self.last_price - self.position.avg_price
+            else:
+                price_diff = self.position.avg_price - self.last_price
+            ct_val = self.client.get_instrument_spec(self.config.symbol).get('ctVal', 1.0)
+            pnl_usdt = price_diff * self.position.total_size * ct_val
+            pnl_rate = price_diff / self.position.avg_price * 100
+            self.logger.info(f"浮动盈亏: {pnl_usdt:.4f} USDT ({pnl_rate:+.2f}%)")
         self.logger.info("-" * 40)
 
     def get_next_dca_price(self) -> float:
@@ -581,8 +588,15 @@ class MartingaleStrategy:
         ]
 
         if not self.position.is_empty():
-            pnl_rate = (self.last_price - self.position.avg_price) / self.position.avg_price * 100
-            lines.append(f"浮动盈亏: {pnl_rate:.2f}%")
+            direction = self.config.direction
+            if direction == 'long':
+                price_diff = self.last_price - self.position.avg_price
+            else:
+                price_diff = self.position.avg_price - self.last_price
+            ct_val = self.client.get_instrument_spec(self.config.symbol).get('ctVal', 1.0)
+            pnl_usdt = price_diff * self.position.total_size * ct_val
+            pnl_rate = price_diff / self.position.avg_price * 100
+            lines.append(f"浮动盈亏: {pnl_usdt:+.4f} USDT ({pnl_rate:+.2f}%)")
             lines.append(f"下次加仓价: {self.get_next_dca_price():.2f}")
             lines.append(f"止盈价格: {self.get_target_profit_price():.2f}")
             lines.append(f"盈亏平衡价: {self.get_breakeven_price():.2f}")

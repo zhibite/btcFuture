@@ -410,16 +410,24 @@ async def get_status(refresh_price: bool = True, refresh_balance: bool = True):
     risk_status = _state.risk_manager.check_loss_risk(balance)
 
     # ---------- 浮动盈亏 ----------
+    # OKX 永续合约盈亏公式: pnl = price_diff × total_sz × ctVal
+    # 例如 BTC-USDT-SWAP: ctVal=0.01 BTC/张，size=0.03 张 -> 名义价值 = 0.03 × 0.01 BTC
     unrealized_pnl = 0
     pnl_rate = 0
     direction = _state.config.get('DIRECTION', 'long')
-    if not pos.is_empty() and current_price > 0:
+    ct_val = 1.0
+    spec = getattr(_state.client, '_instrument_specs', {}).get(
+        getattr(_state.strategy, 'config', None) and _state.strategy.config.symbol, {}
+    )
+    if spec and 'ctVal' in spec:
+        ct_val = spec['ctVal']
+    if not pos.is_empty() and current_price > 0 and pos.avg_price > 0:
         if direction == "long":
-            unrealized_pnl = (current_price - pos.avg_price) * pos.total_size
-            pnl_rate = (current_price - pos.avg_price) / pos.avg_price * 100
+            price_diff = current_price - pos.avg_price
         else:
-            unrealized_pnl = (pos.avg_price - current_price) * pos.total_size
-            pnl_rate = (pos.avg_price - current_price) / pos.avg_price * 100
+            price_diff = pos.avg_price - current_price
+        unrealized_pnl = price_diff * pos.total_size * ct_val
+        pnl_rate = price_diff / pos.avg_price * 100
 
     return {
         "success": True,
