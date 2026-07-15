@@ -117,7 +117,8 @@ def initialize_trading():
     config = get_merged_config()
 
     # 如果数据库没有配置，从YAML加载默认值
-    if not db_config := load_persistent_config():
+    db_config = load_persistent_config()
+    if not db_config:
         # 首次使用，加载YAML默认值并保存到数据库
         yaml_defaults = load_config()
         if yaml_defaults:
