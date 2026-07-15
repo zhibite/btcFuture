@@ -81,16 +81,21 @@
 
         async function updateNavPrice() {
             try {
+                // 优先从 window 全局缓存读取（由 index.html 的 WebSocket 实时更新）
+                if (window.__btcPrice !== undefined) {
+                    document.getElementById('navPrice').textContent = 'BTC: $' + Number(window.__btcPrice).toFixed(2);
+                    return;
+                }
                 const res = await fetch('/api/status');
                 const data = await res.json();
-                document.getElementById('navPrice').textContent = 'BTC: $' + data.price.toFixed(2);
+                document.getElementById('navPrice').textContent = 'BTC: $' + Number(data.price || 0).toFixed(2);
                 if (data.mode) updateModeDisplay(data.mode);
             } catch (e) {
                 console.log('Failed to update price');
             }
         }
         updateNavPrice();
-        setInterval(updateNavPrice, 3000);
+        setInterval(updateNavPrice, 10000);
     </script>
     {% block scripts %}{% endblock %}
 </body>

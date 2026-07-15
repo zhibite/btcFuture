@@ -14,7 +14,7 @@
     <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
         <div class="text-sm text-gray-400 mb-1">账户余额</div>
         <div id="balance" class="text-2xl font-bold text-white">-- USDT</div>
-        <div id="balanceChange" class="text-xs text-gray-500 mt-1">--</div>
+        <div id="balanceHint" class="text-xs text-gray-500 mt-1">连接中...</div>
     </div>
 
     <!-- 持仓状态 -->
@@ -180,18 +180,63 @@
         }
     }
 
+    // 缓存完整 status，tick 只更新价格/浮动盈亏相关字段
+    let _fullState = null;
+
+    function mergeState(data) {
+        // tick 只覆盖部分字段，其他保留上次 full 推送的值
+        if (data.type === 'full' || (!_fullState && data.direction !== undefined)) {
+            _fullState = data;
+        } else if (_fullState) {
+            // tick: 仅更新已知字段
+            Object.assign(_fullState, data);
+        } else {
+            _fullState = data;
+        }
+        return _fullState;
+    }
+
     function updateUI(data) {
+        const merged = mergeState(data);
+        const d = merged;
+
         // 价格
-        document.getElementById('currentPrice').textContent = '$' + data.price.toFixed(2);
+        if (d.price !== undefined && d.price !== null) {
+            const px = Number(d.price);
+            document.getElementById('currentPrice').textContent = '$' + px.toFixed(2);
+            window.__btcPrice = px;
+            const navEl = document.getElementById('navPrice');
+            if (navEl) navEl.textContent = 'BTC: $' + px.toFixed(2);
+        }
 
         // 余额
-        document.getElementById('balance').textContent = data.balance.toFixed(2) + ' USDT';
+        if (d.balance !== undefined && d.balance !== null) {
+            document.getElementById('balance').textContent = Number(d.balance).toFixed(2) + ' USDT';
+        }
+        if (d.balance_source) {
+            const hint = document.getElementById('balanceHint');
+            if (hint) {
+                if (d.balance_source === 'okx') {
+                    hint.textContent = '✓ OKX';
+                    hint.className = 'text-xs text-success mt-1';
+                } else if (d.balance_source === 'no_api_key') {
+                    hint.textContent = '⚠ 未配置 API Key';
+                    hint.className = 'text-xs text-yellow-400 mt-1';
+                } else if (d.balance_source.startsWith('okx_error') || d.balance_source.startsWith('exception')) {
+                    hint.textContent = '✗ ' + d.balance_source;
+                    hint.className = 'text-xs text-danger mt-1';
+                } else {
+                    hint.textContent = '本地缓存';
+                    hint.className = 'text-xs text-gray-400 mt-1';
+                }
+            }
+        }
 
         // 模式提示条
-        if (data.mode) {
+        if (d.mode) {
             const strip = document.getElementById('modeStrip');
             const label = document.getElementById('modeLabel');
-            if (data.mode === 'live') {
+            if (d.mode === 'live') {
                 strip.className = 'mb-6 px-4 py-2 rounded-lg border bg-red-900/30 border-red-700 text-sm flex items-center justify-between';
                 label.className = 'font-semibold text-red-400';
                 label.textContent = '实盘';
@@ -204,50 +249,52 @@
             }
         }
 
+        if (!d.direction) return;
+
         // 交易方向提示
         const directionHint = document.getElementById('directionHint');
-        const directionText = data.direction === 'long' ? '做多' : '做空';
+        const directionText = d.direction === 'long' ? '做多' : '做空';
         directionHint.textContent = '当前方向: ' + directionText;
-        directionHint.className = 'text-sm ' + (data.direction === 'long' ? 'text-success' : 'text-danger') + ' mt-3';
+        directionHint.className = 'text-sm ' + (d.direction === 'long' ? 'text-success' : 'text-danger') + ' mt-3';
 
         // 持仓状态
         const posDetail = document.getElementById('positionDetail');
         const posStatus = document.getElementById('positionStatus');
         const posSize = document.getElementById('positionSize');
 
-        if (data.position) {
+        if (d.position && d.strategy) {
             hasPosition = true;
             posDetail.classList.remove('hidden');
-            const sideText = data.position.side === 'long' ? '多单' : '空单';
+            const sideText = d.position.side === 'long' ? '多单' : '空单';
             posStatus.textContent = sideText + '持仓中';
-            posStatus.className = 'text-2xl font-bold ' + (data.position.side === 'long' ? 'text-success' : 'text-danger');
-            posSize.textContent = data.position.total_size.toFixed(4) + ' 张';
+            posStatus.className = 'text-2xl font-bold ' + (d.position.side === 'long' ? 'text-success' : 'text-danger');
+            posSize.textContent = d.position.total_size.toFixed(4) + ' 张';
 
             // 持仓详情
             document.getElementById('posSide').textContent = sideText;
-            document.getElementById('posSide').className = 'text-lg font-medium ' + (data.position.side === 'long' ? 'text-success' : 'text-danger');
-            document.getElementById('posSize').textContent = data.position.total_size.toFixed(4);
-            document.getElementById('posAvgPrice').textContent = '$' + data.position.avg_price.toFixed(2);
-            document.getElementById('posTime').textContent = data.position.first_entry_time || '--';
-            document.getElementById('posDca').textContent = data.position.dca_count + '/' + data.strategy.max_dca;
-            document.getElementById('nextDcaPrice').textContent = data.strategy.next_dca_price > 0 ? '$' + data.strategy.next_dca_price.toFixed(2) : '--';
-            document.getElementById('targetProfit').textContent = '$' + data.strategy.target_profit_price.toFixed(2);
-            document.getElementById('breakeven').textContent = '$' + data.strategy.breakeven_price.toFixed(2);
+            document.getElementById('posSide').className = 'text-lg font-medium ' + (d.position.side === 'long' ? 'text-success' : 'text-danger');
+            document.getElementById('posSize').textContent = d.position.total_size.toFixed(4);
+            document.getElementById('posAvgPrice').textContent = '$' + d.position.avg_price.toFixed(2);
+            document.getElementById('posTime').textContent = d.position.first_entry_time || '--';
+            document.getElementById('posDca').textContent = d.position.dca_count + '/' + d.strategy.max_dca;
+            document.getElementById('nextDcaPrice').textContent = d.strategy.next_dca_price > 0 ? '$' + d.strategy.next_dca_price.toFixed(2) : '--';
+            document.getElementById('targetProfit').textContent = '$' + d.strategy.target_profit_price.toFixed(2);
+            document.getElementById('breakeven').textContent = '$' + d.strategy.breakeven_price.toFixed(2);
 
             // 浮动盈亏
             const pnlEl = document.getElementById('unrealizedPnl');
             const pnlRateEl = document.getElementById('pnlRate');
-            pnlEl.textContent = data.unrealized_pnl.toFixed(2) + ' USDT';
-            pnlRateEl.textContent = data.pnl_rate.toFixed(2) + '%';
+            pnlEl.textContent = d.unrealized_pnl.toFixed(2) + ' USDT';
+            pnlRateEl.textContent = d.pnl_rate.toFixed(2) + '%';
 
-            if (data.unrealized_pnl >= 0) {
+            if (d.unrealized_pnl >= 0) {
                 pnlEl.className = 'text-2xl font-bold text-success';
                 pnlRateEl.className = 'text-sm text-success mt-1';
             } else {
                 pnlEl.className = 'text-2xl font-bold text-danger';
                 pnlRateEl.className = 'text-sm text-danger mt-1';
             }
-        } else {
+        } else if (d.position === null) {
             hasPosition = false;
             posDetail.classList.add('hidden');
             posStatus.textContent = '空仓';
@@ -257,28 +304,30 @@
             document.getElementById('pnlRate').textContent = '--';
         }
 
+        if (!d.risk || !d.stats) return;
+
         // 风控
         const riskLevel = document.getElementById('riskLevel');
-        riskLevel.textContent = data.risk.level === 'safe' ? '安全' :
-                                data.risk.level === 'warning' ? '注意' :
-                                data.risk.level === 'danger' ? '危险' : '紧急';
-        riskLevel.className = 'text-lg font-medium ' + (data.risk.level === 'safe' ? 'text-success' :
-                                                       data.risk.level === 'warning' ? 'text-warning' : 'text-danger');
+        riskLevel.textContent = d.risk.level === 'safe' ? '安全' :
+                                d.risk.level === 'warning' ? '注意' :
+                                d.risk.level === 'danger' ? '危险' : '紧急';
+        riskLevel.className = 'text-lg font-medium ' + (d.risk.level === 'safe' ? 'text-success' :
+                                                       d.risk.level === 'warning' ? 'text-warning' : 'text-danger');
 
-        document.getElementById('riskLossRate').textContent = data.risk.loss_rate.toFixed(2) + '%';
-        document.getElementById('totalProfit').textContent = data.stats.total_profit.toFixed(2) + ' U';
-        document.getElementById('totalLoss').textContent = data.stats.total_loss.toFixed(2) + ' U';
+        document.getElementById('riskLossRate').textContent = d.risk.loss_rate.toFixed(2) + '%';
+        document.getElementById('totalProfit').textContent = d.stats.total_profit.toFixed(2) + ' U';
+        document.getElementById('totalLoss').textContent = d.stats.total_loss.toFixed(2) + ' U';
 
         // 统计
-        document.getElementById('statTotalCycles').textContent = data.stats.total_cycles;
-        document.getElementById('statProfitCycles').textContent = data.stats.profit_cycles;
-        document.getElementById('statLossCycles').textContent = data.stats.loss_cycles;
+        document.getElementById('statTotalCycles').textContent = d.stats.total_cycles;
+        document.getElementById('statProfitCycles').textContent = d.stats.profit_cycles;
+        document.getElementById('statLossCycles').textContent = d.stats.loss_cycles;
 
-        const winRate = data.stats.total_cycles > 0 ?
-            (data.stats.profit_cycles / data.stats.total_cycles * 100).toFixed(1) : '0';
+        const winRate = d.stats.total_cycles > 0 ?
+            (d.stats.profit_cycles / d.stats.total_cycles * 100).toFixed(1) : '0';
         document.getElementById('statWinRate').textContent = winRate + '%';
 
-        const netPnl = data.stats.total_profit - data.stats.total_loss;
+        const netPnl = d.stats.total_profit - d.stats.total_loss;
         const netPnlEl = document.getElementById('statNetPnl');
         netPnlEl.textContent = netPnl.toFixed(2) + ' U';
         netPnlEl.className = netPnl >= 0 ? 'text-xl font-bold text-success' : 'text-xl font-bold text-danger';
@@ -331,8 +380,38 @@
         });
     });
 
-    // 初始化
-    fetchStatus();
-    setInterval(fetchStatus, 2000);
+    // 初始化：建立 WebSocket 实时连接
+    let ws = null;
+    let wsReconnectTimer = null;
+
+    function connectWS() {
+        const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+        ws = new WebSocket(`${proto}://${location.host}/ws/status`);
+        ws.onopen = () => {
+            console.log('WS connected');
+            // 连上后立即拉一次完整状态
+            fetchStatus();
+        };
+        ws.onmessage = (ev) => {
+            try {
+                const data = JSON.parse(ev.data);
+                if (data.type === 'tick' || data.type === 'full' || data.price !== undefined) {
+                    updateUI(data);
+                }
+            } catch (e) {
+                console.error('WS parse error:', e);
+            }
+        };
+        ws.onclose = () => {
+            console.log('WS disconnected, retry in 3s');
+            wsReconnectTimer = setTimeout(connectWS, 3000);
+        };
+        ws.onerror = (e) => {
+            console.error('WS error', e);
+            ws.close();
+        };
+    }
+
+    connectWS();
 </script>
 {% endblock %}

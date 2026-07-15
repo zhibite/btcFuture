@@ -280,29 +280,82 @@ async def config_page(request: Request):
 # ============ API 接口 ============
 
 @app.get("/api/status")
-async def get_status():
-    """获取交易状态"""
+async def get_status(refresh_price: bool = True, refresh_balance: bool = True):
+    """获取交易状态
+    refresh_price: 是否重新拉取 OKX 实时价格
+    refresh_balance: 是否重新拉取 OKX 账户余额
+    """
     if not _state.strategy:
         initialize_trading()
 
     pos = _state.strategy.position
     mode = get_active_mode()
+    symbol = _state.config.get('SYMBOL', 'BTC-USDT-SWAP')
 
-    # 统一从 OKX API 读取余额（模拟盘/实盘都走同一接口）
-    balance_resp = _state.client.get_balance()
-    balance = 0
-    if isinstance(balance_resp, dict) and balance_resp.get('code') == '0' and balance_resp.get('data'):
-        balance = float(balance_resp['data'][0].get('totalEq', 0))
-        _state.client.sim_balance = balance
+    # ---------- 价格 ----------
+    # 模拟盘：本地 SimulatedMarket（可被 set_market_price 等接口更新）
+    # 实盘：直接请求 OKX /api/v5/market/ticker 公开行情
+    current_price = 0.0
+    price_source = 'unknown'
+    if refresh_price:
+        if mode == 'simulation':
+            if _state.market:
+                current_price = _state.market.get_price()
+                price_source = 'simulated'
+            else:
+                current_price = 65000.0
+                price_source = 'default'
+        else:
+            try:
+                px = _state.client.get_current_price(symbol)
+                if px and px > 0:
+                    current_price = px
+                    price_source = 'okx'
+                elif _state.market:
+                    current_price = _state.market.get_price()
+                    price_source = 'simulated_fallback'
+                else:
+                    current_price = 0.0
+                    price_source = 'unavailable'
+            except Exception as e:
+                print(f"获取 OKX 价格失败: {e}")
+                current_price = _state.market.get_price() if _state.market else 0.0
+                price_source = 'error'
+    else:
+        if _state.market:
+            current_price = _state.market.get_price()
+        else:
+            current_price = 0.0
 
-    current_price = _state.market.get_price() if _state.market else _state.client.get_current_price(_state.config.get('SYMBOL', 'BTC-USDT-SWAP'))
+    # ---------- 余额 ----------
+    balance = _state.client.sim_balance or 0
+    balance_source = 'local'
+    api_ok = bool(_state.client.api_key and _state.client.secret_key and _state.client.passphrase)
+
+    if refresh_balance and api_ok:
+        try:
+            balance_resp = _state.client.get_balance()
+            if isinstance(balance_resp, dict) and balance_resp.get('code') == '0' and balance_resp.get('data'):
+                balance = float(balance_resp['data'][0].get('totalEq', 0))
+                _state.client.sim_balance = balance
+                balance_source = 'okx'
+            else:
+                msg = balance_resp.get('msg', 'unknown') if isinstance(balance_resp, dict) else str(balance_resp)
+                balance_source = f'okx_error:{msg}'
+                print(f"获取余额失败: {balance_source}")
+        except Exception as e:
+            balance_source = f'exception:{e}'
+            print(f"获取余额异常: {e}")
+    elif not api_ok:
+        balance_source = 'no_api_key'
+
     risk_status = _state.risk_manager.check_loss_risk(balance)
 
-    # 计算浮动盈亏
+    # ---------- 浮动盈亏 ----------
     unrealized_pnl = 0
     pnl_rate = 0
     direction = _state.config.get('DIRECTION', 'long')
-    if not pos.is_empty():
+    if not pos.is_empty() and current_price > 0:
         if direction == "long":
             unrealized_pnl = (current_price - pos.avg_price) * pos.total_size
             pnl_rate = (current_price - pos.avg_price) / pos.avg_price * 100
@@ -315,8 +368,11 @@ async def get_status():
         "timestamp": datetime.now().isoformat(),
         "mode": mode,
         "simulation": mode == 'simulation',
-        "price": current_price,
-        "balance": balance,
+        "price": float(current_price or 0),
+        "price_source": price_source,
+        "balance": float(balance or 0),
+        "balance_source": balance_source,
+        "api_configured": api_ok,
         "direction": direction,
         "position": {
             "side": pos.side.value,
@@ -604,14 +660,40 @@ manager = ConnectionManager()
 
 @app.websocket("/ws/status")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket实时推送"""
+    """WebSocket实时推送 - 价格 1秒/次，完整状态(余额) 5秒/次"""
     await manager.connect(websocket)
+    last_full = 0
     try:
         while True:
-            # 获取最新状态
-            status = await get_status()
-            await websocket.send_json(status)
-            await asyncio.sleep(2)  # 每2秒推送一次
+            now = asyncio.get_event_loop().time()
+            # 每 1 秒推一次轻量价格
+            try:
+                tick = await get_status(refresh_price=True, refresh_balance=False)
+                await websocket.send_json({
+                    "type": "tick",
+                    "timestamp": tick.get("timestamp"),
+                    "price": tick.get("price"),
+                    "price_source": tick.get("price_source"),
+                    "unrealized_pnl": tick.get("unrealized_pnl"),
+                    "pnl_rate": tick.get("pnl_rate"),
+                    "position": tick.get("position"),
+                    "stats": tick.get("stats"),
+                    "risk": tick.get("risk"),
+                })
+            except Exception as e:
+                print(f"WS tick error: {e}")
+
+            # 每 5 秒推一次完整状态（含余额）
+            if now - last_full >= 5:
+                last_full = now
+                try:
+                    full = await get_status(refresh_price=False, refresh_balance=True)
+                    full["type"] = "full"
+                    await websocket.send_json(full)
+                except Exception as e:
+                    print(f"WS full error: {e}")
+
+            await asyncio.sleep(1)
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
