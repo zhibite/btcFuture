@@ -139,18 +139,9 @@ class OKXClient:
         return self._request('POST', path, body=body)
 
     def get_balance(self) -> Dict[str, Any]:
-        """获取账户余额"""
-        if self.simulation:
-            return {
-                'code': '0',
-                'data': [{
-                    'totalEq': str(self.sim_balance),
-                    'upl': '0',
-                    'eq': str(self.sim_balance)
-                }]
-            }
-
+        """获取账户余额（统一调用 OKX API，模拟盘也走 demo 接口）"""
         # OKX balance 接口：GET 请求不需要 body，ccy 作为 query param
+        # 模拟盘和实盘都走同一个 API，区别在 session header 中的 x-simulated-trading
         path = "/api/v5/account/balance"
         params = {"ccy": "USDT"}
         return self._request('GET', path, params=params)

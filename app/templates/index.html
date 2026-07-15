@@ -2,7 +2,7 @@
 
 {% block content %}
 <!-- 实时价格卡片 -->
-<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-3">
     <!-- BTC价格 -->
     <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
         <div class="text-sm text-gray-400 mb-1">BTC价格</div>
@@ -14,7 +14,7 @@
     <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
         <div class="text-sm text-gray-400 mb-1">账户余额</div>
         <div id="balance" class="text-2xl font-bold text-white">-- USDT</div>
-        <div id="balanceChange" class="text-sm text-gray-500 mt-1">--</div>
+        <div id="balanceChange" class="text-xs text-gray-500 mt-1">--</div>
     </div>
 
     <!-- 持仓状态 -->
@@ -30,6 +30,16 @@
         <div id="unrealizedPnl" class="text-2xl font-bold text-white">-- USDT</div>
         <div id="pnlRate" class="text-sm text-gray-500 mt-1">--</div>
     </div>
+</div>
+
+<!-- 模式状态条 -->
+<div id="modeStrip" class="mb-6 px-4 py-2 rounded-lg border bg-yellow-900/30 border-yellow-700 text-sm flex items-center justify-between">
+    <div>
+        <span class="text-gray-400">当前交易模式：</span>
+        <span id="modeLabel" class="font-semibold text-yellow-400">模拟盘</span>
+        <span class="text-gray-500 ml-2">(使用 OKX Demo 资金，不影响真实资产)</span>
+    </div>
+    <a href="/config" class="text-primary hover:underline text-xs">切换模式 →</a>
 </div>
 
 <!-- 持仓详情 -->
@@ -176,6 +186,23 @@
 
         // 余额
         document.getElementById('balance').textContent = data.balance.toFixed(2) + ' USDT';
+
+        // 模式提示条
+        if (data.mode) {
+            const strip = document.getElementById('modeStrip');
+            const label = document.getElementById('modeLabel');
+            if (data.mode === 'live') {
+                strip.className = 'mb-6 px-4 py-2 rounded-lg border bg-red-900/30 border-red-700 text-sm flex items-center justify-between';
+                label.className = 'font-semibold text-red-400';
+                label.textContent = '实盘';
+                strip.querySelector('span:last-of-type').textContent = '(使用真实资金，请谨慎操作)';
+            } else {
+                strip.className = 'mb-6 px-4 py-2 rounded-lg border bg-yellow-900/30 border-yellow-700 text-sm flex items-center justify-between';
+                label.className = 'font-semibold text-yellow-400';
+                label.textContent = '模拟盘';
+                strip.querySelector('span:last-of-type').textContent = '(使用 OKX Demo 资金，不影响真实资产)';
+            }
+        }
 
         // 交易方向提示
         const directionHint = document.getElementById('directionHint');

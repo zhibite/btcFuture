@@ -43,7 +43,8 @@
                 </div>
                 <div class="flex items-center space-x-4">
                     <span id="navPrice" class="text-sm text-gray-400">BTC: --</span>
-                    <span id="navStatus" class="px-2 py-1 text-xs rounded bg-success">模拟中</span>
+                    <span id="navModeBadge" class="px-2 py-1 text-xs rounded bg-warning text-white">模拟盘</span>
+                    <span id="navStatus" class="px-2 py-1 text-xs rounded bg-success">运行中</span>
                 </div>
             </div>
         </div>
@@ -58,18 +59,32 @@
     <footer class="bg-gray-800 border-t border-gray-700 mt-8">
         <div class="max-w-7xl mx-auto px-4 py-4">
             <div class="text-center text-sm text-gray-500">
-                BTC马丁格尔策略交易系统 | 模拟交易模式
+                BTC马丁格尔策略交易系统 | <span id="footerMode">模拟交易模式</span>
             </div>
         </div>
     </footer>
 
     <script>
-        // 更新导航栏价格
+        function updateModeDisplay(mode) {
+            const badge = document.getElementById('navModeBadge');
+            const footer = document.getElementById('footerMode');
+            if (mode === 'live') {
+                badge.textContent = '实盘';
+                badge.className = 'px-2 py-1 text-xs rounded bg-danger text-white';
+                if (footer) footer.textContent = '实盘交易模式（真实资金）';
+            } else {
+                badge.textContent = '模拟盘';
+                badge.className = 'px-2 py-1 text-xs rounded bg-warning text-white';
+                if (footer) footer.textContent = '模拟交易模式（OKX demo）';
+            }
+        }
+
         async function updateNavPrice() {
             try {
                 const res = await fetch('/api/status');
                 const data = await res.json();
                 document.getElementById('navPrice').textContent = 'BTC: $' + data.price.toFixed(2);
+                if (data.mode) updateModeDisplay(data.mode);
             } catch (e) {
                 console.log('Failed to update price');
             }
