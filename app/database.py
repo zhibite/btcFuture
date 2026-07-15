@@ -235,6 +235,33 @@ class Database:
             row = cursor.fetchone()
             return row['initial_balance'] if row else 2000.0
 
+    # ============ 模式管理 (模拟盘 / 实盘) ============
+
+    def get_active_mode(self, default: str = 'simulation') -> str:
+        """获取当前激活的模式: 'simulation' 或 'live'"""
+        return self.get_config('active_mode', default)
+
+    def set_active_mode(self, mode: str):
+        """设置激活的模式"""
+        if mode not in ('simulation', 'live'):
+            raise ValueError(f"Invalid mode: {mode}")
+        self.set_config('active_mode', mode)
+
+    def get_mode_config(self, mode: str) -> Dict[str, Any]:
+        """获取指定模式下的配置 (去除 key 前缀)"""
+        prefix = f"{mode}_"
+        all_cfg = self.get_all_config()
+        result = {}
+        for k, v in all_cfg.items():
+            if k.startswith(prefix):
+                result[k[len(prefix):]] = v
+        return result
+
+    def set_mode_config(self, mode: str, config: Dict[str, Any]):
+        """设置指定模式下的配置 (自动加前缀)"""
+        prefixed = {f"{mode}_{k}": v for k, v in config.items()}
+        self.set_all_config(prefixed)
+
 
 # 全局数据库实例
 _db: Optional[Database] = None

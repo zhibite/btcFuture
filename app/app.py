@@ -114,26 +114,42 @@ def get_merged_config() -> Dict[str, Any]:
     """获取合并后的配置（YAML + 数据库，数据库优先）"""
     yaml_config = load_config()
     db_config = load_persistent_config()
-    # 合并配置，数据库中的值覆盖YAML中的值
     merged = {**yaml_config, **db_config}
     return merged
 
 
-def initialize_trading():
-    """初始化交易组件"""
-    # 加载合并配置
-    config = get_merged_config()
+def get_active_mode() -> str:
+    """获取当前激活模式: 'simulation' 或 'live'"""
+    db = get_db()
+    return db.get_active_mode('simulation')
 
-    # 如果数据库没有配置，从YAML加载默认值
-    db_config = load_persistent_config()
-    if not db_config:
-        # 首次使用，加载YAML默认值并保存到数据库
+
+def load_mode_config(mode: str) -> Dict[str, Any]:
+    """加载指定模式的配置。若未配置过则从 YAML 加载默认值"""
+    db = get_db()
+    cfg = db.get_mode_config(mode)
+    if not cfg:
         yaml_defaults = load_config()
         if yaml_defaults:
-            save_config_to_db(yaml_defaults)
-            config = yaml_defaults
+            cfg = yaml_defaults.copy()
+            cfg['SIMULATION'] = (mode == 'simulation')
+            db.set_mode_config(mode, cfg)
+    else:
+        cfg['SIMULATION'] = (mode == 'simulation')
+    return cfg
 
-    _state.config = config
+
+def save_mode_config(mode: str, config: Dict[str, Any]):
+    """保存指定模式的配置"""
+    db = get_db()
+    db.set_mode_config(mode, config)
+
+
+def initialize_trading():
+    """初始化交易组件"""
+    db = get_db()
+    mode = get_active_mode()
+    config = load_mode_config(mode)
 
     # 获取数据库中的余额（如果存在）
     db = get_db()
@@ -359,24 +375,32 @@ async def get_trades():
 
 @app.get("/api/config")
 async def get_config():
-    """获取当前配置"""
+    """获取当前配置 + 模式信息"""
+    db = get_db()
+    mode = get_active_mode()
+    cfg = load_mode_config(mode)
     return {
         "success": True,
-        "config": _state.config
+        "mode": mode,
+        "config": cfg,
+        "modes": {
+            "simulation": load_mode_config('simulation'),
+            "live": load_mode_config('live')
+        }
     }
 
 
 @app.post("/api/config")
 async def update_config(request: Request):
-    """更新配置"""
+    """更新配置（保存到当前激活模式）"""
     body = await request.json()
+    mode = get_active_mode()
 
-    config = _state.config.copy()
-    config.update({
+    cfg = load_mode_config(mode)
+    cfg.update({
         'API_KEY': body.get('api_key', ''),
         'SECRET_KEY': body.get('secret_key', ''),
         'PASSPHRASE': body.get('passphrase', ''),
-        'SIMULATION': body.get('simulation', True),
         'LEVERAGE': body.get('leverage', 2),
         'FIRST_ORDER_SIZE': body.get('first_order_size', 10),
         'MULTIPLIER': body.get('multiplier', 1.5),
@@ -384,21 +408,51 @@ async def update_config(request: Request):
         'MAX_DCA_COUNT': body.get('max_dca_count', 7),
         'TAKE_PROFIT': body.get('take_profit', 0.02),
         'MAX_LOSS_RATE': body.get('max_loss_rate', 0.25),
+        'TREND_PAUSE_RATE': body.get('trend_pause_rate', 0.05),
         'AUTO_LOOP': body.get('auto_loop', False),
-        'DIRECTION': body.get('direction', 'long')
+        'DIRECTION': body.get('direction', 'long'),
+        'SYMBOL': body.get('symbol', 'BTC-USDT-SWAP'),
+        'TOTAL_CAPITAL': body.get('total_capital', 2000),
+        'CHECK_INTERVAL': body.get('check_interval', 2),
     })
 
-    # 保存到数据库（持久化）
-    save_config_to_db(config)
-    _state.config = config
+    save_mode_config(mode, cfg)
+    _state.config = cfg
 
-    # 同时保存到YAML（备份）
-    save_config(config)
+    # 同时保存到YAML（备份当前激活模式）
+    save_config(cfg)
 
-    # 重新初始化策略
     initialize_trading()
 
-    return {"success": True, "message": "配置已更新"}
+    return {"success": True, "message": f"[{mode}] 配置已更新", "mode": mode}
+
+
+@app.post("/api/mode/switch")
+async def switch_mode(request: Request):
+    """切换 模拟盘 / 实盘"""
+    body = await request.json()
+    mode = body.get('mode', 'simulation')
+    if mode not in ('simulation', 'live'):
+        return {"success": False, "message": "mode 必须是 simulation 或 live"}
+
+    db = get_db()
+    db.set_active_mode(mode)
+
+    # 重新加载该模式下的配置
+    cfg = load_mode_config(mode)
+    _state.config = cfg
+
+    # 重新初始化策略/客户端
+    initialize_trading()
+
+    return {"success": True, "message": f"已切换到{mode}", "mode": mode, "config": cfg}
+
+
+@app.get("/api/mode")
+async def get_mode():
+    """获取当前激活模式"""
+    mode = get_active_mode()
+    return {"success": True, "mode": mode}
 
 
 @app.post("/api/action/open")
