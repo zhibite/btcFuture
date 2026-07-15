@@ -52,40 +52,15 @@ app = FastAPI(
 # 静态文件和模板
 BASE_DIR = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
-
-# 自定义 Jinja2Templates，禁用缓存以避免 unhashable type 错误
-import jinja2
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
-class NoCacheJinja2Templates:
-    """禁用缓存的 Jinja2 模板类"""
-
-    def __init__(self, directory: str):
-        self.directory = directory
-        self._env = jinja2.Environment(
-            loader=jinja2.FileSystemLoader(directory),
-            auto_reload=True,
-        )
-        # 禁用模板缓存
-        self._env.cache = {}
-
-    def TemplateResponse(self, name: str, context: dict, status_code: int = 200):
-        """返回模板响应"""
-        from starlette.templating import _Template
-        from starlette.responses import HTMLResponse
-
-        # 每次都重新加载模板
-        template = self._env.get_template(name)
-        return HTMLResponse(
-            template.render(**context),
-            status_code=status_code
-        )
-
-    def __getattr__(self, name):
-        return getattr(self._env, name)
-
-
-templates = NoCacheJinja2Templates(str(BASE_DIR / "templates"))
+# ============ 自定义 template renderer ============
+def render_template(template_name: str, request: Request = None, **context):
+    """直接渲染模板返回 HTMLResponse，绕过 TemplateResponse 的缓存 key 问题"""
+    from fastapi.responses import HTMLResponse
+    template = templates.get_template(template_name)
+    return HTMLResponse(template.render(request=request, **context))
 
 
 # ============ 配置加载/保存 ============
@@ -261,28 +236,19 @@ async def shutdown_event():
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     """首页 - 交易状态"""
-    return templates.TemplateResponse("index.html", {
-        "request": request,
-        "title": "交易状态"
-    })
+    return render_template("index.html", request, title="交易状态")
 
 
 @app.get("/trades", response_class=HTMLResponse)
 async def trades_page(request: Request):
     """交易记录页面"""
-    return templates.TemplateResponse("trades.html", {
-        "request": request,
-        "title": "交易记录"
-    })
+    return render_template("trades.html", request, title="交易记录")
 
 
 @app.get("/config", response_class=HTMLResponse)
 async def config_page(request: Request):
     """配置页面"""
-    return templates.TemplateResponse("config.html", {
-        "request": request,
-        "title": "策略配置"
-    })
+    return render_template("config.html", request, title="策略配置")
 
 
 # ============ API 接口 ============
