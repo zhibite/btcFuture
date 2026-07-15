@@ -154,7 +154,7 @@ def initialize_trading():
     # 获取数据库中的余额（如果存在）
     db = get_db()
     saved_balance = db.get_balance()
-    initial_balance = config.get('TOTAL_CAPITAL', 2000)
+    default_initial = config.get('TOTAL_CAPITAL', 2000)
 
     # 创建客户端
     _state.client = OKXClient(
@@ -172,13 +172,19 @@ def initialize_trading():
         elif saved_balance is not None:
             _state.client.sim_balance = saved_balance
         else:
-            _state.client.reset_sim_balance(initial_balance)
+            _state.client.reset_sim_balance(default_initial)
     except Exception as e:
         print(f"获取余额失败: {e}")
         if saved_balance is not None:
             _state.client.sim_balance = saved_balance
         else:
-            _state.client.reset_sim_balance(initial_balance)
+            _state.client.reset_sim_balance(default_initial)
+
+    # 初始本金：实盘用第一次 OKX 拉到的真实余额（用户的真实本金），模拟盘用配置默认值
+    # 这样亏损率/回撤都从 0% 起算，不会出现"300U 显示 85% 亏损"的误报
+    is_live = not config.get('SIMULATION', True)
+    has_real_balance = is_live and _state.client.sim_balance and _state.client.sim_balance > 0
+    initial_balance = _state.client.sim_balance if has_real_balance else default_initial
 
     # 创建风控
     risk_config = RiskConfig(
