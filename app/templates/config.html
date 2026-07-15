@@ -29,6 +29,23 @@
                             class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:border-primary focus:outline-none">
                         <div class="text-xs text-gray-500 mt-1">占总资金约0.5%，安全缓冲</div>
                     </div>
+
+                    <div class="col-span-2">
+                        <label class="block text-sm text-gray-400 mb-2">交易方向</label>
+                        <div class="flex gap-4">
+                            <label class="flex items-center cursor-pointer">
+                                <input type="radio" name="direction" id="direction_long" value="long" checked
+                                    class="w-5 h-5 bg-gray-700 border-gray-600 text-primary focus:ring-primary focus:ring-offset-0">
+                                <span class="ml-2 text-white">做多 (Long)</span>
+                            </label>
+                            <label class="flex items-center cursor-pointer">
+                                <input type="radio" name="direction" id="direction_short" value="short"
+                                    class="w-5 h-5 bg-gray-700 border-gray-600 text-primary focus:ring-primary focus:ring-offset-0">
+                                <span class="ml-2 text-white">做空 (Short)</span>
+                            </label>
+                        </div>
+                        <div class="text-xs text-gray-500 mt-1">做多: 低价买入高价卖出，做空: 高价卖出低价买回</div>
+                    </div>
                 </div>
             </div>
 
@@ -179,6 +196,11 @@
                 document.getElementById('take_profit').value = (config.TAKE_PROFIT * 100) || 2;
                 document.getElementById('max_loss_rate').value = (config.MAX_LOSS_RATE * 100) || 25;
                 document.getElementById('auto_loop').checked = config.AUTO_LOOP || false;
+
+                // 设置交易方向
+                const direction = config.DIRECTION || 'long';
+                document.getElementById('direction_long').checked = direction === 'long';
+                document.getElementById('direction_short').checked = direction === 'short';
             }
         } catch (e) {
             console.error('Failed to load config:', e);
@@ -194,6 +216,8 @@
         document.getElementById('take_profit').value = 2;
         document.getElementById('max_loss_rate').value = 25;
         document.getElementById('auto_loop').checked = false;
+        document.getElementById('direction_long').checked = true;
+        document.getElementById('direction_short').checked = false;
     }
 
     document.getElementById('configForm').addEventListener('submit', async (e) => {
@@ -208,7 +232,8 @@
             max_dca_count: parseInt(formData.get('max_dca_count')),
             take_profit: parseFloat(formData.get('take_profit')) / 100,
             max_loss_rate: parseFloat(formData.get('max_loss_rate')) / 100,
-            auto_loop: formData.get('auto_loop') === 'on'
+            auto_loop: formData.get('auto_loop') === 'on',
+            direction: formData.get('direction') || 'long'
         };
 
         try {

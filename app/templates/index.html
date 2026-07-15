@@ -99,7 +99,7 @@
     <h2 class="text-lg font-semibold mb-4">交易操作</h2>
     <div class="flex flex-wrap gap-3">
         <button id="btnOpen" class="px-4 py-2 bg-success hover:bg-green-600 text-white rounded-lg font-medium transition">
-            开仓做多
+            开仓
         </button>
         <button id="btnAdd" class="px-4 py-2 bg-primary hover:bg-blue-600 text-white rounded-lg font-medium transition">
             加仓
@@ -111,6 +111,7 @@
             重置余额
         </button>
     </div>
+    <p id="directionHint" class="text-sm text-gray-400 mt-3">当前方向: 做多</p>
 </div>
 
 <!-- 模拟价格 -->
@@ -176,6 +177,12 @@
         // 余额
         document.getElementById('balance').textContent = data.balance.toFixed(2) + ' USDT';
 
+        // 交易方向提示
+        const directionHint = document.getElementById('directionHint');
+        const directionText = data.direction === 'long' ? '做多' : '做空';
+        directionHint.textContent = '当前方向: ' + directionText;
+        directionHint.className = 'text-sm ' + (data.direction === 'long' ? 'text-success' : 'text-danger') + ' mt-3';
+
         // 持仓状态
         const posDetail = document.getElementById('positionDetail');
         const posStatus = document.getElementById('positionStatus');
@@ -184,12 +191,14 @@
         if (data.position) {
             hasPosition = true;
             posDetail.classList.remove('hidden');
-            posStatus.textContent = '多单持仓中';
-            posStatus.className = 'text-2xl font-bold text-success';
+            const sideText = data.position.side === 'long' ? '多单' : '空单';
+            posStatus.textContent = sideText + '持仓中';
+            posStatus.className = 'text-2xl font-bold ' + (data.position.side === 'long' ? 'text-success' : 'text-danger');
             posSize.textContent = data.position.total_size.toFixed(4) + ' 张';
 
             // 持仓详情
-            document.getElementById('posSide').textContent = '多单';
+            document.getElementById('posSide').textContent = sideText;
+            document.getElementById('posSide').className = 'text-lg font-medium ' + (data.position.side === 'long' ? 'text-success' : 'text-danger');
             document.getElementById('posSize').textContent = data.position.total_size.toFixed(4);
             document.getElementById('posAvgPrice').textContent = '$' + data.position.avg_price.toFixed(2);
             document.getElementById('posTime').textContent = data.position.first_entry_time || '--';

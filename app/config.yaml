@@ -12,6 +12,9 @@ SIMULATION: True
 # 交易对
 SYMBOL: "BTC-USDT-SWAP"
 
+# 交易方向: "long"=做多, "short"=做空
+DIRECTION: "long"
+
 # ============ 策略参数 ============
 # 杠杆倍数 (建议: 2)
 LEVERAGE: 2

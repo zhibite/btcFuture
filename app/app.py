@@ -122,7 +122,8 @@ def initialize_trading():
         max_dca_count=config.get('MAX_DCA_COUNT', 7),
         take_profit=config.get('TAKE_PROFIT', 0.02),
         symbol=config.get('SYMBOL', 'BTC-USDT-SWAP'),
-        auto_loop=config.get('AUTO_LOOP', False)
+        auto_loop=config.get('AUTO_LOOP', False),
+        direction=config.get('DIRECTION', 'long')
     )
     _state.strategy = MartingaleStrategy(
         client=_state.client,
@@ -186,15 +187,21 @@ async def get_status():
     # 计算浮动盈亏
     unrealized_pnl = 0
     pnl_rate = 0
+    direction = _state.config.get('DIRECTION', 'long')
     if not pos.is_empty():
-        unrealized_pnl = (current_price - pos.avg_price) * pos.total_size
-        pnl_rate = (current_price - pos.avg_price) / pos.avg_price * 100
+        if direction == "long":
+            unrealized_pnl = (current_price - pos.avg_price) * pos.total_size
+            pnl_rate = (current_price - pos.avg_price) / pos.avg_price * 100
+        else:
+            unrealized_pnl = (pos.avg_price - current_price) * pos.total_size
+            pnl_rate = (pos.avg_price - current_price) / pos.avg_price * 100
 
     return {
         "success": True,
         "timestamp": datetime.now().isoformat(),
         "price": current_price,
         "balance": balance,
+        "direction": direction,
         "position": {
             "side": pos.side.value,
             "total_size": pos.total_size,
@@ -254,7 +261,8 @@ async def update_config(
     max_dca_count: int = Form(...),
     take_profit: float = Form(...),
     max_loss_rate: float = Form(...),
-    auto_loop: bool = Form(False)
+    auto_loop: bool = Form(False),
+    direction: str = Form("long")
 ):
     """更新配置"""
     config = _state.config.copy()
@@ -266,7 +274,8 @@ async def update_config(
         'MAX_DCA_COUNT': max_dca_count,
         'TAKE_PROFIT': take_profit,
         'MAX_LOSS_RATE': max_loss_rate,
-        'AUTO_LOOP': auto_loop
+        'AUTO_LOOP': auto_loop,
+        'DIRECTION': direction
     })
 
     save_config(config)

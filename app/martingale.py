@@ -73,6 +73,7 @@ class MartingaleConfig:
     take_profit: float = 0.02         # 止盈目标 (2%)
     symbol: str = "BTC-USDT-SWAP"     # 交易对
     auto_loop: bool = False           # 自动循环
+    direction: str = "long"            # 交易方向: long=做多, short=做空
 
 
 class MartingaleStrategy:
@@ -174,6 +175,50 @@ class MartingaleStrategy:
         # 开仓做多
         return self._open_position()
 
+    def _get_side(self) -> str:
+        """获取下单方向"""
+        return "buy" if self.config.direction == "long" else "sell"
+
+    def _get_close_side(self) -> str:
+        """获取平仓方向"""
+        return "sell" if self.config.direction == "long" else "buy"
+
+    def _get_position_side(self) -> PositionSide:
+        """获取持仓方向枚举"""
+        return PositionSide.LONG if self.config.direction == "long" else PositionSide.SHORT
+
+    def _calculate_price_change(self, old_price: float, new_price: float) -> float:
+        """计算价格变化率"""
+        if self.config.direction == "long":
+            # 做多：价格下跌为负，上涨为正
+            return (new_price - old_price) / old_price
+        else:
+            # 做空：价格上涨为负，下跌为正
+            return (old_price - new_price) / old_price
+
+    def _check_dca_condition(self) -> bool:
+        """检查加仓条件（根据方向）"""
+        if self.position.is_empty():
+            return False
+
+        if self.position.dca_count >= self.config.max_dca_count:
+            return False
+
+        price_change = self._calculate_price_change(self.last_dca_price, self.last_price)
+        return price_change >= self.config.price_interval
+
+    def _check_take_profit_condition(self) -> float:
+        """检查止盈条件，返回盈亏比例"""
+        if self.position.is_empty():
+            return 0.0
+
+        if self.config.direction == "long":
+            # 做多：价格上涨止盈
+            return (self.last_price - self.position.avg_price) / self.position.avg_price
+        else:
+            # 做空：价格下跌止盈
+            return (self.position.avg_price - self.last_price) / self.position.avg_price
+
     def _open_position(self) -> bool:
         """
         执行开仓
@@ -181,7 +226,8 @@ class MartingaleStrategy:
         Returns:
             是否成功
         """
-        self.logger.info(f"[OPEN] 开仓做多 @ {self.last_price:.2f}")
+        side_str = "做多" if self.config.direction == "long" else "做空"
+        self.logger.info(f"[OPEN] 开仓{side_str} @ {self.last_price:.2f}")
 
         # 计算仓位大小
         size = self._calculate_position_size(0)
@@ -190,13 +236,13 @@ class MartingaleStrategy:
         # 下单
         order_id = self.client.place_order(
             symbol=self.config.symbol,
-            side="buy",
+            side=self._get_side(),
             order_type="market",
             size=str(contract_size)
         )
 
         if order_id:
-            self.position.side = PositionSide.LONG
+            self.position.side = self._get_position_side()
             self.position.total_size = contract_size
             self.position.avg_price = self.last_price
             self.position.first_entry_price = self.last_price
@@ -215,12 +261,12 @@ class MartingaleStrategy:
             self.recorder.record_trade(
                 trade_type='open',
                 symbol=self.config.symbol,
-                side='buy',
+                side=self._get_side(),
                 size=contract_size,
                 price=self.last_price
             )
 
-            self.logger.info(f"开仓成功! 仓位: {contract_size:.4f}, 均價: {self.last_price:.2f}")
+            self.logger.info(f"开仓成功! 仓位: {contract_size:.4f}, 均价: {self.last_price:.2f}")
             self._log_position_info()
             return True
 
@@ -233,17 +279,7 @@ class MartingaleStrategy:
         Returns:
             是否成功加仓
         """
-        if self.position.is_empty():
-            return False
-
-        if self.position.dca_count >= self.config.max_dca_count:
-            self.logger.info("已达最大加仓次数，不再加仓")
-            return False
-
-        # 计算加仓条件
-        price_drop = (self.last_dca_price - self.last_price) / self.last_dca_price
-
-        if price_drop < self.config.price_interval:
+        if not self._check_dca_condition():
             return False
 
         # 执行加仓
@@ -256,6 +292,7 @@ class MartingaleStrategy:
         Returns:
             是否成功
         """
+        side_str = "做多" if self.config.direction == "long" else "做空"
         self.logger.info(f"[ADD] 加仓 #{self.position.dca_count + 1} @ {self.last_price:.2f}")
 
         # 计算新仓位
@@ -265,7 +302,7 @@ class MartingaleStrategy:
         # 下单
         order_id = self.client.place_order(
             symbol=self.config.symbol,
-            side="buy",
+            side=self._get_side(),
             order_type="market",
             size=str(contract_size)
         )
@@ -287,7 +324,7 @@ class MartingaleStrategy:
             self.recorder.record_trade(
                 trade_type='add',
                 symbol=self.config.symbol,
-                side='buy',
+                side=self._get_side(),
                 size=contract_size,
                 price=self.last_price
             )
@@ -308,11 +345,11 @@ class MartingaleStrategy:
         if self.position.is_empty():
             return False
 
-        profit_rate = (self.last_price - self.position.avg_price) / self.position.avg_price
+        profit_rate = self._check_take_profit_condition()
 
         if profit_rate >= self.config.take_profit:
-            self.logger.info(f"触发止盈! 涨幅: {profit_rate * 100:.2f}%")
-            return self._close_position(pronl=profit_rate)
+            self.logger.info(f"触发止盈! 收益率: {profit_rate * 100:.2f}%")
+            return self._close_position(pnl=profit_rate)
 
         return False
 
@@ -336,9 +373,9 @@ class MartingaleStrategy:
 
         # 检查最大加仓次数后的亏损
         if self.position.dca_count >= self.config.max_dca_count:
-            loss_rate = (self.position.avg_price - self.last_price) / self.position.avg_price
-            if loss_rate >= 0.02:  # 累计亏损超过2%
-                self.logger.warning(f"最大加仓后仍亏损 {loss_rate * 100:.2f}%，止损")
+            loss_rate = self._check_take_profit_condition()
+            if loss_rate <= -0.02:  # 累计亏损超过2%
+                self.logger.warning(f"最大加仓后仍亏损 {abs(loss_rate) * 100:.2f}%，止损")
                 return self._close_position(stop_loss=True)
 
         return False
@@ -362,7 +399,7 @@ class MartingaleStrategy:
         # 下单平仓
         order_id = self.client.place_order(
             symbol=self.config.symbol,
-            side="sell",
+            side=self._get_close_side(),
             order_type="market",
             size=str(self.position.total_size),
             reduce_only=True
@@ -372,8 +409,10 @@ class MartingaleStrategy:
             # 计算盈亏
             if self.position.side == PositionSide.LONG:
                 profit = (self.last_price - self.position.avg_price) * self.position.total_size
-            else:
+            elif self.position.side == PositionSide.SHORT:
                 profit = (self.position.avg_price - self.last_price) * self.position.total_size
+            else:
+                profit = 0
 
             # 扣除手续费 (约0.05%)
             fee = self.position.total_size * self.last_price * 0.0005
@@ -382,7 +421,7 @@ class MartingaleStrategy:
             self.recorder.record_trade(
                 trade_type='stop_loss' if stop_loss else 'close',
                 symbol=self.config.symbol,
-                side='sell',
+                side=self._get_close_side(),
                 size=self.position.total_size,
                 price=self.last_price,
                 pnl=profit,
@@ -462,7 +501,12 @@ class MartingaleStrategy:
             return 0.0
 
         interval = self.config.price_interval
-        return self.last_dca_price * (1 - interval)
+        if self.config.direction == "long":
+            # 做多：价格下跌时加仓
+            return self.last_dca_price * (1 - interval)
+        else:
+            # 做空：价格上涨时加仓
+            return self.last_dca_price * (1 + interval)
 
     def get_breakeven_price(self) -> float:
         """
@@ -489,7 +533,12 @@ class MartingaleStrategy:
             return 0.0
 
         breakeven = self.get_breakeven_price()
-        return breakeven * (1 + self.config.take_profit)
+        if self.config.direction == "long":
+            # 做多：价格上涨止盈
+            return breakeven * (1 + self.config.take_profit)
+        else:
+            # 做空：价格下跌止盈
+            return breakeven * (1 - self.config.take_profit)
 
     def get_status_report(self) -> str:
         """
