@@ -279,7 +279,10 @@ class OKXClient:
         result = self._request('POST', path, body=body)
 
         if result.get('code') == '0' and result.get('data'):
+            self.last_error = None
             return result['data'][0].get('ordId')
+        # 把 OKX 真实错误记录下来供上层诊断
+        self.last_error = f"code={result.get('code')} msg={result.get('msg')} data={result.get('data')}"
         return None
 
     def close_position(self, symbol: str) -> bool:

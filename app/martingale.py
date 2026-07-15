@@ -270,6 +270,12 @@ class MartingaleStrategy:
             self._log_position_info()
             return True
 
+        # 下单失败：把 OKX 真实错误暴露出来
+        last_err = getattr(self.client, 'last_error', None) or \
+                   getattr(self.client, '_last_error', None) or \
+                   f"size={contract_size:.6f}, price={self.last_price:.2f}"
+        self.last_error = f"OKX 下单失败: {last_err}"
+        self.logger.error(self.last_error)
         return False
 
     def check_and_add_position(self) -> bool:

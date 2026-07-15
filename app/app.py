@@ -526,9 +526,12 @@ async def action_open():
     # 保存状态
     save_state()
 
+    msg = "开仓成功" if success else "开仓失败"
+    if not success and getattr(_state.strategy, 'last_error', None):
+        msg = _state.strategy.last_error
     return {
         "success": success,
-        "message": "开仓成功" if success else "开仓失败"
+        "message": msg
     }
 
 
@@ -686,7 +689,13 @@ async def websocket_endpoint(websocket: WebSocket):
                     "stats": tick.get("stats"),
                     "risk": tick.get("risk"),
                 })
+            except (WebSocketDisconnect, RuntimeError) as e:
+                # 连接已关闭，停止推送
+                print(f"WS tick closed: {e}")
+                manager.disconnect(websocket)
+                return
             except Exception as e:
+                # 单条 tick 失败不退出循环
                 print(f"WS tick error: {e}")
 
             # 每 5 秒推一次完整状态（含余额）
@@ -696,11 +705,19 @@ async def websocket_endpoint(websocket: WebSocket):
                     full = await get_status(refresh_price=False, refresh_balance=True)
                     full["type"] = "full"
                     await websocket.send_json(full)
+                except (WebSocketDisconnect, RuntimeError) as e:
+                    print(f"WS full closed: {e}")
+                    manager.disconnect(websocket)
+                    return
                 except Exception as e:
                     print(f"WS full error: {e}")
 
             await asyncio.sleep(1)
     except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception as e:
+        # 兜底：避免后台协程崩溃
+        print(f"WS endpoint error: {e}")
         manager.disconnect(websocket)
 
 
