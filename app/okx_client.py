@@ -46,6 +46,9 @@ class OKXClient:
         self.simulation = simulation
         self.base_url = self.BASE_URL_TEST
 
+        # 实例日志器（便于在 app 层用 self.client.logger.xxx 调试）
+        self.logger = logging.getLogger("OKXClient")
+
         # 模拟账户余额
         self.sim_balance = 2000.0
 
