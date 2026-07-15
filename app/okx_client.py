@@ -270,6 +270,7 @@ class OKXClient:
             "side": side,
             "ordType": order_type,
             "sz": str(size),
+            "posSide": "net",
             "reduceOnly": str(reduce_only).lower()
         }
 
@@ -280,9 +281,15 @@ class OKXClient:
 
         if result.get('code') == '0' and result.get('data'):
             self.last_error = None
-            return result['data'][0].get('ordId')
+            ord_id = result['data'][0].get('ordId')
+            if not ord_id:
+                # 成功提交但子级 sCode 出错
+                inner = result['data'][0] if result['data'] else {}
+                self.last_error = f"sCode={inner.get('sCode')} sMsg={inner.get('sMsg')} (size={size})"
+                return None
+            return ord_id
         # 把 OKX 真实错误记录下来供上层诊断
-        self.last_error = f"code={result.get('code')} msg={result.get('msg')} data={result.get('data')}"
+        self.last_error = f"code={result.get('code')} msg={result.get('msg')} data={result.get('data')} (size={size})"
         return None
 
     def close_position(self, symbol: str) -> bool:
@@ -301,10 +308,15 @@ class OKXClient:
         path = "/api/v5/trade/close-position"
         body = {
             "instId": symbol,
-            "mgnMode": "cross"
+            "mgnMode": "cross",
+            "posSide": "net"
         }
         result = self._request('POST', path, body=body)
-        return result.get('code') == '0'
+        if result.get('code') == '0':
+            self.last_error = None
+            return True
+        self.last_error = f"code={result.get('code')} msg={result.get('msg')} data={result.get('data')}"
+        return False
 
     def cancel_order(self, symbol: str, order_id: str) -> bool:
         """取消订单"""
