@@ -122,6 +122,15 @@ class OKXClient:
             response.raise_for_status()
             return response.json()
 
+        except requests.exceptions.HTTPError as e:
+            # 把 OKX 返回的真实错误体（如 {"code":"401","msg":"Invalid OK-ACCESS-KEY"}）一并带上
+            body = ''
+            try:
+                body = e.response.text if e.response is not None else ''
+            except Exception:
+                pass
+            return {'code': str(e.response.status_code) if e.response is not None else '-1',
+                    'msg': f"{e} | body={body}"}
         except requests.exceptions.RequestException as e:
             return {'code': '-1', 'msg': str(e)}
 
