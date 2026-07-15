@@ -1,0 +1,103 @@
+/* BTC马丁策略 - 自定义样式 */
+
+/* 全局样式 */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* 导航链接 */
+.nav-link {
+    transition: all 0.2s ease;
+}
+
+/* 卡片样式 */
+.bg-gray-800 {
+    transition: box-shadow 0.2s ease;
+}
+
+.bg-gray-800:hover {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+}
+
+/* 按钮样式 */
+button {
+    transition: all 0.2s ease;
+}
+
+button:active {
+    transform: scale(0.98);
+}
+
+/* 表格样式 */
+table {
+    border-collapse: collapse;
+}
+
+th, td {
+    white-space: nowrap;
+}
+
+/* 数字滚动效果 */
+.price-up {
+    animation: flash-green 0.5s ease;
+}
+
+.price-down {
+    animation: flash-red 0.5s ease;
+}
+
+@keyframes flash-green {
+    0%, 100% { background-color: transparent; }
+    50% { background-color: rgba(16, 185, 129, 0.3); }
+}
+
+@keyframes flash-red {
+    0%, 100% { background-color: transparent; }
+    50% { background-color: rgba(239, 68, 68, 0.3); }
+}
+
+/* 加载动画 */
+.loading {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: #fff;
+    animation: spin 1s ease-in-out infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #1f2937;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #4b5563;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #6b7280;
+}
+
+/* 输入框焦点样式 */
+input:focus {
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
+/* 响应式调整 */
+@media (max-width: 640px) {
+    .grid {
+        gap: 0.75rem;
+    }
+}

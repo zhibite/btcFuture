@@ -1,0 +1,302 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- 实时价格卡片 -->
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+    <!-- BTC价格 -->
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="text-sm text-gray-400 mb-1">BTC价格</div>
+        <div id="currentPrice" class="text-2xl font-bold text-white">--</div>
+        <div id="priceChange" class="text-sm text-gray-500 mt-1">--</div>
+    </div>
+
+    <!-- 账户余额 -->
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="text-sm text-gray-400 mb-1">账户余额</div>
+        <div id="balance" class="text-2xl font-bold text-white">-- USDT</div>
+        <div id="balanceChange" class="text-sm text-gray-500 mt-1">--</div>
+    </div>
+
+    <!-- 持仓状态 -->
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="text-sm text-gray-400 mb-1">持仓状态</div>
+        <div id="positionStatus" class="text-2xl font-bold text-warning">空仓</div>
+        <div id="positionSize" class="text-sm text-gray-500 mt-1">--</div>
+    </div>
+
+    <!-- 浮动盈亏 -->
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <div class="text-sm text-gray-400 mb-1">浮动盈亏</div>
+        <div id="unrealizedPnl" class="text-2xl font-bold text-white">-- USDT</div>
+        <div id="pnlRate" class="text-sm text-gray-500 mt-1">--</div>
+    </div>
+</div>
+
+<!-- 持仓详情 -->
+<div id="positionDetail" class="bg-gray-800 rounded-lg p-6 border border-gray-700 mb-6 hidden">
+    <h2 class="text-lg font-semibold mb-4">当前持仓详情</h2>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div>
+            <div class="text-sm text-gray-400">持仓方向</div>
+            <div id="posSide" class="text-lg font-medium text-success">多单</div>
+        </div>
+        <div>
+            <div class="text-sm text-gray-400">持仓数量</div>
+            <div id="posSize" class="text-lg font-medium">--</div>
+        </div>
+        <div>
+            <div class="text-sm text-gray-400">平均价格</div>
+            <div id="posAvgPrice" class="text-lg font-medium">--</div>
+        </div>
+        <div>
+            <div class="text-sm text-gray-400">开仓时间</div>
+            <div id="posTime" class="text-lg font-medium">--</div>
+        </div>
+        <div>
+            <div class="text-sm text-gray-400">加仓次数</div>
+            <div id="posDca" class="text-lg font-medium">--</div>
+        </div>
+        <div>
+            <div class="text-sm text-gray-400">下次加仓价</div>
+            <div id="nextDcaPrice" class="text-lg font-medium text-warning">--</div>
+        </div>
+        <div>
+            <div class="text-sm text-gray-400">止盈价格</div>
+            <div id="targetProfit" class="text-lg font-medium text-success">--</div>
+        </div>
+        <div>
+            <div class="text-sm text-gray-400">盈亏平衡价</div>
+            <div id="breakeven" class="text-lg font-medium">--</div>
+        </div>
+    </div>
+</div>
+
+<!-- 风控状态 -->
+<div class="bg-gray-800 rounded-lg p-6 border border-gray-700 mb-6">
+    <h2 class="text-lg font-semibold mb-4">风控状态</h2>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div>
+            <div class="text-sm text-gray-400">风险等级</div>
+            <div id="riskLevel" class="text-lg font-medium text-success">安全</div>
+        </div>
+        <div>
+            <div class="text-sm text-gray-400">当前亏损率</div>
+            <div id="riskLossRate" class="text-lg font-medium">--</div>
+        </div>
+        <div>
+            <div class="text-sm text-gray-400">累计盈利</div>
+            <div id="totalProfit" class="text-lg font-medium text-success">--</div>
+        </div>
+        <div>
+            <div class="text-sm text-gray-400">累计亏损</div>
+            <div id="totalLoss" class="text-lg font-medium text-danger">--</div>
+        </div>
+    </div>
+</div>
+
+<!-- 操作按钮 -->
+<div class="bg-gray-800 rounded-lg p-6 border border-gray-700 mb-6">
+    <h2 class="text-lg font-semibold mb-4">交易操作</h2>
+    <div class="flex flex-wrap gap-3">
+        <button id="btnOpen" class="px-4 py-2 bg-success hover:bg-green-600 text-white rounded-lg font-medium transition">
+            开仓做多
+        </button>
+        <button id="btnAdd" class="px-4 py-2 bg-primary hover:bg-blue-600 text-white rounded-lg font-medium transition">
+            加仓
+        </button>
+        <button id="btnClose" class="px-4 py-2 bg-danger hover:bg-red-600 text-white rounded-lg font-medium transition">
+            平仓
+        </button>
+        <button id="btnReset" class="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded-lg font-medium transition">
+            重置余额
+        </button>
+    </div>
+</div>
+
+<!-- 模拟价格 -->
+<div class="bg-gray-800 rounded-lg p-6 border border-gray-700 mb-6">
+    <h2 class="text-lg font-semibold mb-4">模拟价格变动</h2>
+    <div class="flex flex-wrap gap-2">
+        <button class="sim-btn px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-sm" data-action="drop_small">小跌 0.5%</button>
+        <button class="sim-btn px-3 py-1 bg-red-700 hover:bg-red-800 text-white rounded text-sm" data-action="drop_medium">中跌 1%</button>
+        <button class="sim-btn px-3 py-1 bg-red-800 hover:bg-red-900 text-white rounded text-sm" data-action="drop_large">大跌 2%</button>
+        <button class="sim-btn px-3 py-1 bg-green-600 hover:bg-green-700 text-white rounded text-sm" data-action="rally_small">小涨 0.5%</button>
+        <button class="sim-btn px-3 py-1 bg-green-700 hover:bg-green-800 text-white rounded text-sm" data-action="rally_medium">中涨 1%</button>
+        <button class="sim-btn px-3 py-1 bg-green-800 hover:bg-green-900 text-white rounded text-sm" data-action="rally_large">大涨 2%</button>
+        <button class="sim-btn px-3 py-1 bg-gray-600 hover:bg-gray-500 text-white rounded text-sm" data-action="random">随机波动</button>
+    </div>
+</div>
+
+<!-- 统计信息 -->
+<div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+    <h2 class="text-lg font-semibold mb-4">交易统计</h2>
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div>
+            <div class="text-sm text-gray-400">总交易轮次</div>
+            <div id="statTotalCycles" class="text-xl font-bold">0</div>
+        </div>
+        <div>
+            <div class="text-sm text-gray-400">盈利轮次</div>
+            <div id="statProfitCycles" class="text-xl font-bold text-success">0</div>
+        </div>
+        <div>
+            <div class="text-sm text-gray-400">亏损轮次</div>
+            <div id="statLossCycles" class="text-xl font-bold text-danger">0</div>
+        </div>
+        <div>
+            <div class="text-sm text-gray-400">胜率</div>
+            <div id="statWinRate" class="text-xl font-bold">--%</div>
+        </div>
+        <div>
+            <div class="text-sm text-gray-400">净盈亏</div>
+            <div id="statNetPnl" class="text-xl font-bold">--</div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let hasPosition = false;
+
+    async function fetchStatus() {
+        try {
+            const res = await fetch('/api/status');
+            const data = await res.json();
+            updateUI(data);
+        } catch (e) {
+            console.error('Failed to fetch status:', e);
+        }
+    }
+
+    function updateUI(data) {
+        // 价格
+        document.getElementById('currentPrice').textContent = '$' + data.price.toFixed(2);
+
+        // 余额
+        document.getElementById('balance').textContent = data.balance.toFixed(2) + ' USDT';
+
+        // 持仓状态
+        const posDetail = document.getElementById('positionDetail');
+        const posStatus = document.getElementById('positionStatus');
+        const posSize = document.getElementById('positionSize');
+
+        if (data.position) {
+            hasPosition = true;
+            posDetail.classList.remove('hidden');
+            posStatus.textContent = '多单持仓中';
+            posStatus.className = 'text-2xl font-bold text-success';
+            posSize.textContent = data.position.total_size.toFixed(4) + ' 张';
+
+            // 持仓详情
+            document.getElementById('posSide').textContent = '多单';
+            document.getElementById('posSize').textContent = data.position.total_size.toFixed(4);
+            document.getElementById('posAvgPrice').textContent = '$' + data.position.avg_price.toFixed(2);
+            document.getElementById('posTime').textContent = data.position.first_entry_time || '--';
+            document.getElementById('posDca').textContent = data.position.dca_count + '/' + data.strategy.max_dca;
+            document.getElementById('nextDcaPrice').textContent = data.strategy.next_dca_price > 0 ? '$' + data.strategy.next_dca_price.toFixed(2) : '--';
+            document.getElementById('targetProfit').textContent = '$' + data.strategy.target_profit_price.toFixed(2);
+            document.getElementById('breakeven').textContent = '$' + data.strategy.breakeven_price.toFixed(2);
+
+            // 浮动盈亏
+            const pnlEl = document.getElementById('unrealizedPnl');
+            const pnlRateEl = document.getElementById('pnlRate');
+            pnlEl.textContent = data.unrealized_pnl.toFixed(2) + ' USDT';
+            pnlRateEl.textContent = data.pnl_rate.toFixed(2) + '%';
+
+            if (data.unrealized_pnl >= 0) {
+                pnlEl.className = 'text-2xl font-bold text-success';
+                pnlRateEl.className = 'text-sm text-success mt-1';
+            } else {
+                pnlEl.className = 'text-2xl font-bold text-danger';
+                pnlRateEl.className = 'text-sm text-danger mt-1';
+            }
+        } else {
+            hasPosition = false;
+            posDetail.classList.add('hidden');
+            posStatus.textContent = '空仓';
+            posStatus.className = 'text-2xl font-bold text-warning';
+            posSize.textContent = '等待入场';
+            document.getElementById('unrealizedPnl').textContent = '-- USDT';
+            document.getElementById('pnlRate').textContent = '--';
+        }
+
+        // 风控
+        const riskLevel = document.getElementById('riskLevel');
+        riskLevel.textContent = data.risk.level === 'safe' ? '安全' :
+                                data.risk.level === 'warning' ? '注意' :
+                                data.risk.level === 'danger' ? '危险' : '紧急';
+        riskLevel.className = 'text-lg font-medium ' + (data.risk.level === 'safe' ? 'text-success' :
+                                                       data.risk.level === 'warning' ? 'text-warning' : 'text-danger');
+
+        document.getElementById('riskLossRate').textContent = data.risk.loss_rate.toFixed(2) + '%';
+        document.getElementById('totalProfit').textContent = data.stats.total_profit.toFixed(2) + ' U';
+        document.getElementById('totalLoss').textContent = data.stats.total_loss.toFixed(2) + ' U';
+
+        // 统计
+        document.getElementById('statTotalCycles').textContent = data.stats.total_cycles;
+        document.getElementById('statProfitCycles').textContent = data.stats.profit_cycles;
+        document.getElementById('statLossCycles').textContent = data.stats.loss_cycles;
+
+        const winRate = data.stats.total_cycles > 0 ?
+            (data.stats.profit_cycles / data.stats.total_cycles * 100).toFixed(1) : '0';
+        document.getElementById('statWinRate').textContent = winRate + '%';
+
+        const netPnl = data.stats.total_profit - data.stats.total_loss;
+        const netPnlEl = document.getElementById('statNetPnl');
+        netPnlEl.textContent = netPnl.toFixed(2) + ' U';
+        netPnlEl.className = netPnl >= 0 ? 'text-xl font-bold text-success' : 'text-xl font-bold text-danger';
+    }
+
+    // 操作按钮
+    document.getElementById('btnOpen').addEventListener('click', async () => {
+        const res = await fetch('/api/action/open', { method: 'POST' });
+        const data = await res.json();
+        alert(data.message);
+        fetchStatus();
+    });
+
+    document.getElementById('btnAdd').addEventListener('click', async () => {
+        const res = await fetch('/api/action/add', { method: 'POST' });
+        const data = await res.json();
+        alert(data.message);
+        fetchStatus();
+    });
+
+    document.getElementById('btnClose').addEventListener('click', async () => {
+        const res = await fetch('/api/action/close', { method: 'POST' });
+        const data = await res.json();
+        alert(data.message);
+        fetchStatus();
+    });
+
+    document.getElementById('btnReset').addEventListener('click', async () => {
+        if (confirm('确定要重置余额吗？')) {
+            const res = await fetch('/api/action/reset', { method: 'POST' });
+            const data = await res.json();
+            alert(data.message);
+            fetchStatus();
+        }
+    });
+
+    // 模拟价格按钮
+    document.querySelectorAll('.sim-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const action = btn.dataset.action;
+            const res = await fetch('/api/simulate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'action=' + action
+            });
+            const data = await res.json();
+            if (data.success) {
+                fetchStatus();
+            }
+        });
+    });
+
+    // 初始化
+    fetchStatus();
+    setInterval(fetchStatus, 2000);
+</script>
+{% endblock %}

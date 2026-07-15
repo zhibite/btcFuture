@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+    <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="text-lg font-semibold">策略参数配置</h2>
+            <button onclick="loadConfig()" class="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded-lg text-sm">
+                重新加载
+            </button>
+        </div>
+
+        <form id="configForm" class="space-y-6">
+            <!-- 基本参数 -->
+            <div class="border-b border-gray-700 pb-4">
+                <h3 class="text-md font-medium mb-4 text-primary">基本参数</h3>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">杠杆倍数</label>
+                        <input type="number" name="leverage" id="leverage" value="2" min="1" max="10"
+                            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:border-primary focus:outline-none">
+                        <div class="text-xs text-gray-500 mt-1">建议: 2倍，风险与效率平衡</div>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">首单保证金 (USDT)</label>
+                        <input type="number" name="first_order_size" id="first_order_size" value="10" min="1" step="1"
+                            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:border-primary focus:outline-none">
+                        <div class="text-xs text-gray-500 mt-1">占总资金约0.5%，安全缓冲</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 加仓参数 -->
+            <div class="border-b border-gray-700 pb-4">
+                <h3 class="text-md font-medium mb-4 text-primary">加仓参数</h3>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">加仓倍数</label>
+                        <input type="number" name="multiplier" id="multiplier" value="1.5" min="1" max="3" step="0.1"
+                            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:border-primary focus:outline-none">
+                        <div class="text-xs text-gray-500 mt-1">建议: 1.5，控制风险</div>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">价格间隔 (%)</label>
+                        <input type="number" name="price_interval" id="price_interval" value="0.8" min="0.1" max="5" step="0.1"
+                            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:border-primary focus:outline-none">
+                        <div class="text-xs text-gray-500 mt-1">按价格跌幅触发，建议: 0.8%</div>
+                    </div>
+
+                    <div class="col-span-2">
+                        <label class="block text-sm text-gray-400 mb-1">最大加仓次数</label>
+                        <input type="number" name="max_dca_count" id="max_dca_count" value="7" min="1" max="15"
+                            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:border-primary focus:outline-none">
+                        <div class="text-xs text-gray-500 mt-1">建议: 7-8次，保留充足缓冲资金</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 止盈止损 -->
+            <div class="border-b border-gray-700 pb-4">
+                <h3 class="text-md font-medium mb-4 text-primary">止盈止损</h3>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">止盈目标 (%)</label>
+                        <input type="number" name="take_profit" id="take_profit" value="2" min="0.5" max="10" step="0.1"
+                            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:border-primary focus:outline-none">
+                        <div class="text-xs text-gray-500 mt-1">建议: 2-3%，覆盖手续费</div>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">硬止损 (%)</label>
+                        <input type="number" name="max_loss_rate" id="max_loss_rate" value="25" min="5" max="50" step="1"
+                            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:border-primary focus:outline-none">
+                        <div class="text-xs text-gray-500 mt-1">总账户亏损达到此比例强制平仓</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 自动循环 -->
+            <div>
+                <h3 class="text-md font-medium mb-4 text-primary">运行模式</h3>
+
+                <div class="flex items-center">
+                    <input type="checkbox" name="auto_loop" id="auto_loop"
+                        class="w-5 h-5 rounded bg-gray-700 border-gray-600 text-primary focus:ring-primary focus:ring-offset-0">
+                    <label for="auto_loop" class="ml-2 text-sm">自动循环</label>
+                </div>
+                <div class="text-xs text-gray-500 mt-1">开启后止盈平仓自动重新开仓，建议先关闭手动测试</div>
+            </div>
+
+            <!-- 提交按钮 -->
+            <div class="flex gap-4 pt-4">
+                <button type="submit" class="flex-1 px-4 py-2 bg-primary hover:bg-blue-600 text-white rounded-lg font-medium transition">
+                    保存配置
+                </button>
+                <button type="button" onclick="resetToDefault()" class="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded-lg font-medium transition">
+                    恢复默认
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- 资金消耗表 -->
+    <div class="bg-gray-800 rounded-lg p-6 border border-gray-700 mt-6">
+        <h2 class="text-lg font-semibold mb-4">资金消耗速查表</h2>
+        <p class="text-sm text-gray-400 mb-4">基于当前配置（首单10U，1.5倍加仓，2倍杠杆）</p>
+
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-700">
+                    <tr>
+                        <th class="px-4 py-2 text-left">补仓次数</th>
+                        <th class="px-4 py-2 text-right">累计保证金</th>
+                        <th class="px-4 py-2 text-right">账户剩余</th>
+                        <th class="px-4 py-2 text-right">累计跌幅</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-700">
+                    <tr>
+                        <td class="px-4 py-2">5次</td>
+                        <td class="px-4 py-2 text-right">208 U</td>
+                        <td class="px-4 py-2 text-right">~1792 U</td>
+                        <td class="px-4 py-2 text-right">4.0%</td>
+                    </tr>
+                    <tr class="bg-yellow-900/30">
+                        <td class="px-4 py-2">7次</td>
+                        <td class="px-4 py-2 text-right font-bold">493 U</td>
+                        <td class="px-4 py-2 text-right">~1507 U</td>
+                        <td class="px-4 py-2 text-right">5.6%</td>
+                    </tr>
+                    <tr>
+                        <td class="px-4 py-2">8次</td>
+                        <td class="px-4 py-2 text-right">749 U</td>
+                        <td class="px-4 py-2 text-right">~1251 U</td>
+                        <td class="px-4 py-2 text-right">6.4%</td>
+                    </tr>
+                    <tr class="text-danger">
+                        <td class="px-4 py-2">9次</td>
+                        <td class="px-4 py-2 text-right">1133 U</td>
+                        <td class="px-4 py-2 text-right">~867 U</td>
+                        <td class="px-4 py-2 text-right">7.2%</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 风险提示 -->
+    <div class="bg-gray-800 rounded-lg p-6 border border-gray-700 mt-6">
+        <h2 class="text-lg font-semibold mb-4 text-warning">风险提示</h2>
+        <ul class="list-disc list-inside text-sm text-gray-400 space-y-2">
+            <li>杠杆放大收益的同时也放大风险，请谨慎设置杠杆倍数</li>
+            <li>马丁策略在单边行情中可能导致较大亏损</li>
+            <li>建议先在模拟盘测试确认安全后再考虑实盘</li>
+            <li>请设置合理的硬止损，防止本金大幅损失</li>
+        </ul>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function loadConfig() {
+        try {
+            const res = await fetch('/api/config');
+            const data = await res.json();
+            if (data.success) {
+                const config = data.config;
+                document.getElementById('leverage').value = config.LEVERAGE || 2;
+                document.getElementById('first_order_size').value = config.FIRST_ORDER_SIZE || 10;
+                document.getElementById('multiplier').value = config.MULTIPLIER || 1.5;
+                document.getElementById('price_interval').value = (config.PRICE_INTERVAL * 100) || 0.8;
+                document.getElementById('max_dca_count').value = config.MAX_DCA_COUNT || 7;
+                document.getElementById('take_profit').value = (config.TAKE_PROFIT * 100) || 2;
+                document.getElementById('max_loss_rate').value = (config.MAX_LOSS_RATE * 100) || 25;
+                document.getElementById('auto_loop').checked = config.AUTO_LOOP || false;
+            }
+        } catch (e) {
+            console.error('Failed to load config:', e);
+        }
+    }
+
+    function resetToDefault() {
+        document.getElementById('leverage').value = 2;
+        document.getElementById('first_order_size').value = 10;
+        document.getElementById('multiplier').value = 1.5;
+        document.getElementById('price_interval').value = 0.8;
+        document.getElementById('max_dca_count').value = 7;
+        document.getElementById('take_profit').value = 2;
+        document.getElementById('max_loss_rate').value = 25;
+        document.getElementById('auto_loop').checked = false;
+    }
+
+    document.getElementById('configForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const formData = new FormData(e.target);
+        const data = {
+            leverage: parseInt(formData.get('leverage')),
+            first_order_size: parseFloat(formData.get('first_order_size')),
+            multiplier: parseFloat(formData.get('multiplier')),
+            price_interval: parseFloat(formData.get('price_interval')) / 100,
+            max_dca_count: parseInt(formData.get('max_dca_count')),
+            take_profit: parseFloat(formData.get('take_profit')) / 100,
+            max_loss_rate: parseFloat(formData.get('max_loss_rate')) / 100,
+            auto_loop: formData.get('auto_loop') === 'on'
+        };
+
+        try {
+            const res = await fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams(data)
+            });
+            const result = await res.json();
+            if (result.success) {
+                alert('配置已保存');
+            } else {
+                alert('保存失败: ' + (result.message || '未知错误'));
+            }
+        } catch (e) {
+            alert('保存失败: ' + e.message);
+        }
+    });
+
+    // 初始化
+    loadConfig();
+</script>
+{% endblock %}

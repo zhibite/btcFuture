@@ -1,0 +1,52 @@
+# OKX 期货马丁格尔策略配置
+
+# ============ 基础配置 ============
+# OKX API Key (从 OKX 开放平台获取)
+API_KEY: ""
+SECRET_KEY: ""
+PASSPHRASE: ""
+
+# 是否使用模拟盘 (True=测试, False=实盘)
+SIMULATION: True
+
+# 交易对
+SYMBOL: "BTC-USDT-SWAP"
+
+# ============ 策略参数 ============
+# 杠杆倍数 (建议: 2)
+LEVERAGE: 2
+
+# 首单保证金 (USDT)
+FIRST_ORDER_SIZE: 10
+
+# 加仓倍数 (建议: 1.5)
+MULTIPLIER: 1.5
+
+# 价格补仓间隔 (建议: 0.008 = 0.8%)
+PRICE_INTERVAL: 0.008
+
+# 单轮最大补仓次数 (建议: 7-8)
+MAX_DCA_COUNT: 7
+
+# 止盈目标 (建议: 0.02 = 2%)
+TAKE_PROFIT: 0.02
+
+# ============ 风控参数 ============
+# 总账户硬止损 (建议: 0.25 = 25%)
+MAX_LOSS_RATE: 0.25
+
+# 趋势风控: 上涨多少暂停开仓 (建议: 0.05 = 5%)
+TREND_PAUSE_RATE: 0.05
+
+# 总交易资金 (USDT)
+TOTAL_CAPITAL: 2000
+
+# ============ 运行参数 ============
+# 价格检查间隔 (秒)
+CHECK_INTERVAL: 2
+
+# 是否自动循环 (建议先 False 手动测试)
+AUTO_LOOP: False
+
+# 日志级别: DEBUG, INFO, WARNING, ERROR
+LOG_LEVEL: "INFO"
