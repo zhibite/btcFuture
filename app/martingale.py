@@ -241,7 +241,8 @@ class MartingaleStrategy:
             symbol=self.config.symbol,
             side=self._get_side(),
             order_type="market",
-            size=str(contract_size)
+            size=str(contract_size),
+            direction=self.config.direction,
         )
 
         if order_id:
@@ -316,7 +317,8 @@ class MartingaleStrategy:
             symbol=self.config.symbol,
             side=self._get_side(),
             order_type="market",
-            size=str(contract_size)
+            size=str(contract_size),
+            direction=self.config.direction,
         )
 
         if order_id:
@@ -418,7 +420,8 @@ class MartingaleStrategy:
             side=self._get_close_side(),
             order_type="market",
             size=str(close_size),
-            reduce_only=True
+            reduce_only=True,
+            direction=self.config.direction,
         )
 
         if order_id:

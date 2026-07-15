@@ -213,6 +213,17 @@ def initialize_trading():
 
     # 预加载合约规格 + 首单不变量检查（防止 _open_position 算出 0.5 张之类被 OKX 拒）
     symbol = strategy_config.symbol
+
+    # 探测账户持仓模式（net_mode / long_short_mode）—— 不同模式 posSide 取值不同
+    try:
+        acct_cfg = _state.client.get_account_config()
+        _state.client.logger.info(
+            f"[ACCOUNT] posMode={acct_cfg['posMode']} acctLv={acct_cfg.get('acctLv', '')} "
+            f"source={acct_cfg.get('_source', '')}"
+        )
+    except Exception as e:
+        _state.client.logger.warning(f"[ACCOUNT] 获取账户配置失败：{e}，使用默认 posMode={_state.client._pos_mode}")
+
     try:
         spec = _state.client.get_instrument_spec(symbol)
         ct_val = spec['ctVal']
@@ -449,6 +460,10 @@ async def get_status(refresh_price: bool = True, refresh_balance: bool = True):
         "instrument_spec": getattr(_state.client, '_instrument_specs', {}).get(
             _state.strategy.config.symbol, {}
         ),
+        "account_config": getattr(_state.client, '_account_config', {
+            'posMode': getattr(_state.client, '_pos_mode', 'net_mode'),
+            '_source': 'not_loaded',
+        }),
         "stats": _state.strategy.stats
     }
 

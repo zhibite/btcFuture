@@ -61,6 +61,10 @@ class OKXClient:
         # 合约规格缓存：symbol -> {ctVal, lotSz, minSz, ctValCcy}
         self._instrument_specs: Dict[str, Dict[str, float]] = {}
 
+        # 账户持仓模式缓存：'net_mode' | 'long_short_mode'
+        # 默认按 'net_mode' 兜底，启动后会被 get_account_config 校准
+        self._pos_mode: str = 'net_mode'
+
     def _get_timestamp(self) -> str:
         """获取 ISO 格式时间戳（必须是 UTC，否则 OKX 返回 50112）"""
         return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
@@ -226,6 +230,85 @@ class OKXClient:
                     f"minSz={spec['minSz']} ctValCcy={spec['ctValCcy']}")
         return spec
 
+    def get_account_config(self, force_refresh: bool = False) -> Dict[str, Any]:
+        """
+        拉取并缓存账户级配置（重点是 posMode）。
+
+        OKX 永续有两种持仓模式：
+          - net_mode (单向持仓): 所有订单 posSide 必须 = "net"
+          - long_short_mode (双向持仓): posSide 必须 = "long" 或 "short"
+
+        Returns:
+            dict with keys: posMode, acctLv, posModeRaw, ...
+        """
+        if not force_refresh and getattr(self, '_account_config', None):
+            return self._account_config
+
+        # 模拟盘默认 net_mode（与大多数默认账户一致）；启动校准后会被覆盖
+        if self.simulation:
+            cfg = {
+                'posMode': self._pos_mode,
+                'acctLv': '2',
+                '_source': 'simulation_default',
+            }
+            self._account_config = cfg
+            self._pos_mode = cfg['posMode']
+            return cfg
+
+        path = "/api/v5/account/config"
+        result = self._request('GET', path)
+
+        if result.get('code') != '0' or not result.get('data'):
+            err = f"code={result.get('code')} msg={result.get('msg')}"
+            self.logger.warning(f"获取账户配置失败：{err}，回退到 {self._pos_mode}")
+            cfg = {'posMode': self._pos_mode, 'acctLv': '', '_source': 'fallback'}
+        else:
+            d = result['data'][0]
+            raw_pos_mode = d.get('posMode', 'net_mode')
+            cfg = {
+                'posMode': raw_pos_mode,
+                'acctLv': d.get('acctLv', ''),
+                'autoLoan': d.get('autoLoan', ''),
+                'greeksType': d.get('greeksType', ''),
+                'level': d.get('level', ''),
+                'liquidationGear': d.get('liquidationGear', ''),
+                'ctIsoMode': d.get('ctIsoMode', ''),
+                '_source': 'okx_live',
+            }
+
+        self._account_config = cfg
+        self._pos_mode = cfg['posMode']
+        self.logger.info(
+            f"账户配置: posMode={cfg['posMode']} acctLv={cfg['acctLv']} "
+            f"level={cfg.get('level', '')}"
+        )
+        return cfg
+
+    def _resolve_pos_side(self, symbol: str, explicit: Optional[str] = None,
+                          direction: Optional[str] = None) -> str:
+        """
+        根据账户 posMode + 策略方向，解析出本次订单的 posSide。
+
+        Args:
+            symbol: 交易对（暂未用，留作未来按 symbol 单独配置）
+            explicit: 调用方显式传入的 posSide（最高优先级）
+            direction: 'long' | 'short'（净模式下被忽略）
+
+        Returns:
+            'net' 或 'long' 或 'short'
+        """
+        if explicit in ('net', 'long', 'short'):
+            return explicit
+
+        if self._pos_mode == 'long_short_mode':
+            if direction == 'short':
+                return 'short'
+            # default + long 都映射为 long
+            return 'long'
+
+        # net_mode 或未知值都兜底为 net
+        return 'net'
+
     def align_sz(self, symbol: str, raw_sz: float) -> float:
         """
         把任意 sz 数量按 lotSz 步长取整，并保证 >= minSz。
@@ -357,7 +440,9 @@ class OKXClient:
 
     def place_order(self, symbol: str, side: str, order_type: str,
                     size: float, price: float = None,
-                    reduce_only: bool = False) -> Optional[str]:
+                    reduce_only: bool = False,
+                    pos_side: Optional[str] = None,
+                    direction: Optional[str] = None) -> Optional[str]:
         """
         下单
 
@@ -368,6 +453,8 @@ class OKXClient:
             size: 数量
             price: 价格 (限价单需要)
             reduce_only: 是否只平仓
+            pos_side: 持仓方向 ('net' | 'long' | 'short')，按账户 posMode 自动推导
+            direction: 策略方向 ('long' | 'short')，仅双向持仓模式有用
 
         Returns:
             订单ID
@@ -382,6 +469,10 @@ class OKXClient:
                 self.sim_balance -= cost / 20  # 假设20倍保证金
             return order_id
 
+        resolved_pos_side = self._resolve_pos_side(
+            symbol, explicit=pos_side, direction=direction
+        )
+
         path = "/api/v5/trade/order"
         body = {
             "instId": symbol,
@@ -389,7 +480,7 @@ class OKXClient:
             "side": side,
             "ordType": order_type,
             "sz": str(size),
-            "posSide": "net",
+            "posSide": resolved_pos_side,
             "reduceOnly": str(reduce_only).lower()
         }
 
@@ -404,19 +495,20 @@ class OKXClient:
             if not ord_id:
                 # 成功提交但子级 sCode 出错
                 inner = result['data'][0] if result['data'] else {}
-                self.last_error = f"sCode={inner.get('sCode')} sMsg={inner.get('sMsg')} (size={size})"
+                self.last_error = f"sCode={inner.get('sCode')} sMsg={inner.get('sMsg')} (size={size}, posSide={resolved_pos_side})"
                 return None
             return ord_id
         # 把 OKX 真实错误记录下来供上层诊断
-        self.last_error = f"code={result.get('code')} msg={result.get('msg')} data={result.get('data')} (size={size})"
+        self.last_error = f"code={result.get('code')} msg={result.get('msg')} data={result.get('data')} (size={size}, posSide={resolved_pos_side})"
         return None
 
-    def close_position(self, symbol: str) -> bool:
+    def close_position(self, symbol: str, direction: Optional[str] = None) -> bool:
         """
         平掉所有持仓
 
         Args:
             symbol: 交易对
+            direction: 策略方向 'long'/'short'，long_short_mode 下需要
 
         Returns:
             是否成功
@@ -424,11 +516,13 @@ class OKXClient:
         if self.simulation:
             return True
 
+        resolved_pos_side = self._resolve_pos_side(symbol, direction=direction)
+
         path = "/api/v5/trade/close-position"
         body = {
             "instId": symbol,
             "mgnMode": "cross",
-            "posSide": "net"
+            "posSide": resolved_pos_side
         }
         result = self._request('POST', path, body=body)
         if result.get('code') == '0':
