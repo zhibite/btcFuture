@@ -9,7 +9,7 @@ import hashlib
 import base64
 import json
 from typing import Optional, Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timezone
 import requests
 
 
@@ -47,8 +47,8 @@ class OKXClient:
         })
 
     def _get_timestamp(self) -> str:
-        """获取 ISO 格式时间戳"""
-        return datetime.utcnow().isoformat() + 'Z'
+        """获取 ISO 格式时间戳（必须是 UTC，否则 OKX 返回 50112）"""
+        return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
 
     def _sign(self, timestamp: str, method: str, path: str,
               query_string: str = "", body: str = "") -> str:
