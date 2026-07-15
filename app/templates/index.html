@@ -55,8 +55,16 @@
             <div id="posSize" class="text-lg font-medium">--</div>
         </div>
         <div>
+            <div class="text-sm text-gray-400">首单价格</div>
+            <div id="posFirstPrice" class="text-lg font-medium">--</div>
+        </div>
+        <div>
             <div class="text-sm text-gray-400">平均价格</div>
             <div id="posAvgPrice" class="text-lg font-medium">--</div>
+        </div>
+        <div>
+            <div class="text-sm text-gray-400">均价偏移</div>
+            <div id="posAvgOffset" class="text-lg font-medium">--</div>
         </div>
         <div>
             <div class="text-sm text-gray-400">开仓时间</div>
@@ -274,7 +282,15 @@
             document.getElementById('posSide').textContent = sideText;
             document.getElementById('posSide').className = 'text-lg font-medium ' + (d.position.side === 'long' ? 'text-success' : 'text-danger');
             document.getElementById('posSize').textContent = d.position.total_size.toFixed(4);
+            document.getElementById('posFirstPrice').textContent = '$' + d.position.first_entry_price.toFixed(2);
             document.getElementById('posAvgPrice').textContent = '$' + d.position.avg_price.toFixed(2);
+            // 均价偏移 = (avg - first) / first，相对首单的下行幅度；DCA 越多越深
+            const offset = d.position.first_entry_price > 0
+                ? (d.position.avg_price - d.position.first_entry_price) / d.position.first_entry_price * 100
+                : 0;
+            const offsetEl = document.getElementById('posAvgOffset');
+            offsetEl.textContent = (offset >= 0 ? '+' : '') + offset.toFixed(2) + '%';
+            offsetEl.className = 'text-lg font-medium ' + (offset < 0 ? 'text-warning' : 'text-gray-300');
             document.getElementById('posTime').textContent = d.position.first_entry_time || '--';
             document.getElementById('posDca').textContent = d.position.dca_count + '/' + d.strategy.max_dca;
             document.getElementById('nextDcaPrice').textContent = d.strategy.next_dca_price > 0 ? '$' + d.strategy.next_dca_price.toFixed(2) : '--';
