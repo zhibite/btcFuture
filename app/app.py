@@ -52,7 +52,15 @@ app = FastAPI(
 # 静态文件和模板
 BASE_DIR = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+# 创建 Jinja2 环境，禁用缓存以避免 unhashable type 错误
+import jinja2
+env = jinja2.Environment(
+    loader=jinja2.FileSystemLoader(str(BASE_DIR / "templates")),
+    auto_reload=True,
+    cache_size=0  # 禁用缓存
+)
+templates = Jinja2Templates(env=env)
 
 
 # ============ 配置加载/保存 ============
