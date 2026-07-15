@@ -53,14 +53,39 @@ app = FastAPI(
 BASE_DIR = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
-# 创建 Jinja2 环境，禁用缓存以避免 unhashable type 错误
+# 自定义 Jinja2Templates，禁用缓存以避免 unhashable type 错误
 import jinja2
-env = jinja2.Environment(
-    loader=jinja2.FileSystemLoader(str(BASE_DIR / "templates")),
-    auto_reload=True,
-    cache_size=0  # 禁用缓存
-)
-templates = Jinja2Templates(env=env)
+
+
+class NoCacheJinja2Templates:
+    """禁用缓存的 Jinja2 模板类"""
+
+    def __init__(self, directory: str):
+        self.directory = directory
+        self._env = jinja2.Environment(
+            loader=jinja2.FileSystemLoader(directory),
+            auto_reload=True,
+        )
+        # 禁用模板缓存
+        self._env.cache = {}
+
+    def TemplateResponse(self, name: str, context: dict, status_code: int = 200):
+        """返回模板响应"""
+        from starlette.templating import _Template
+        from starlette.responses import HTMLResponse
+
+        # 每次都重新加载模板
+        template = self._env.get_template(name)
+        return HTMLResponse(
+            template.render(**context),
+            status_code=status_code
+        )
+
+    def __getattr__(self, name):
+        return getattr(self._env, name)
+
+
+templates = NoCacheJinja2Templates(str(BASE_DIR / "templates"))
 
 
 # ============ 配置加载/保存 ============
