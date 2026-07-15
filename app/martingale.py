@@ -538,15 +538,15 @@ class MartingaleStrategy:
         """
         获取盈亏平衡价格
 
+        不考虑手续费：策略使用 2× 杠杆，2% 涨幅对应 4% 账户盈利，
+        远大于 7 层马丁满仓 ~0.4% 的总手续费成本，无需补偿。
         Returns:
-            盈亏平衡价格
+            盈亏平衡价格（即加权平均成本价）
         """
         if self.position.is_empty():
             return 0.0
 
-        # 考虑手续费后的盈亏平衡价
-        fee_rate = 0.0005 * 2  # 开仓+平仓
-        return self.position.avg_price * (1 + fee_rate)
+        return self.position.avg_price
 
     def get_target_profit_price(self) -> float:
         """
