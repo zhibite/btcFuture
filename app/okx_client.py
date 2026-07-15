@@ -8,9 +8,13 @@ import hmac
 import hashlib
 import base64
 import json
+import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 import requests
+
+
+logger = logging.getLogger("OKXClient")
 
 
 class OKXClient:
@@ -19,6 +23,11 @@ class OKXClient:
     # API 端点
     BASE_URL_TEST = "https://www.okx.com"
     BASE_URL_PROD = "https://www.okx.com"
+
+    # 合约规格默认值（与 BTC-USDT-SWAP 当前实际一致；启动时会用 /instruments 校准）
+    DEFAULT_CTVAL = 0.01       # 1 张 = 0.01 BTC
+    DEFAULT_LOT_SZ = 0.01      # 步长 0.01 张
+    DEFAULT_MIN_SZ = 0.01      # 最小单 0.01 张
 
     def __init__(self, api_key: str, secret_key: str, passphrase: str,
                  simulation: bool = True):
@@ -45,6 +54,9 @@ class OKXClient:
             'Content-Type': 'application/json',
             'x-simulated-trading': '1' if simulation else '0'
         })
+
+        # 合约规格缓存：symbol -> {ctVal, lotSz, minSz, ctValCcy}
+        self._instrument_specs: Dict[str, Dict[str, float]] = {}
 
     def _get_timestamp(self) -> str:
         """获取 ISO 格式时间戳（必须是 UTC，否则 OKX 返回 50112）"""
@@ -155,6 +167,110 @@ class OKXClient:
             "mgnMode": "cross"
         }
         return self._request('POST', path, body=body)
+
+    def get_instrument_spec(self, symbol: str, force_refresh: bool = False) -> Dict[str, float]:
+        """
+        拉取并缓存合约规格（ctVal / lotSz / minSz / tickSz）。
+
+        Args:
+            symbol: 交易对，如 BTC-USDT-SWAP
+            force_refresh: 忽略缓存重新拉取
+
+        Returns:
+            dict with keys: ctVal, lotSz, minSz, tickSz, ctValCcy
+        """
+        if not force_refresh and symbol in self._instrument_specs:
+            return self._instrument_specs[symbol]
+
+        # 模拟盘也用同一套默认值（已经和 OKX 现行 BTC-USDT-SWAP 规格一致）
+        if self.simulation:
+            spec = {
+                'ctVal': self.DEFAULT_CTVAL,
+                'lotSz': self.DEFAULT_LOT_SZ,
+                'minSz': self.DEFAULT_MIN_SZ,
+                'tickSz': 0.1,
+                'ctValCcy': 'BTC',
+            }
+            self._instrument_specs[symbol] = spec
+            return spec
+
+        path = "/api/v5/public/instruments"
+        params = {"instType": "SWAP", "instId": symbol}
+        result = self._request('GET', path, params=params)
+
+        if result.get('code') != '0' or not result.get('data'):
+            err = f"code={result.get('code')} msg={result.get('msg')}"
+            logger.warning(f"获取合约规格失败 ({symbol})：{err}，回退到默认值")
+            spec = {
+                'ctVal': self.DEFAULT_CTVAL,
+                'lotSz': self.DEFAULT_LOT_SZ,
+                'minSz': self.DEFAULT_MIN_SZ,
+                'tickSz': 0.1,
+                'ctValCcy': 'BTC',
+            }
+        else:
+            d = result['data'][0]
+            spec = {
+                'ctVal': float(d.get('ctVal', self.DEFAULT_CTVAL)),
+                'lotSz': float(d.get('lotSz', self.DEFAULT_LOT_SZ)),
+                'minSz': float(d.get('minSz', self.DEFAULT_MIN_SZ)),
+                'tickSz': float(d.get('tickSz', 0.1)),
+                'ctValCcy': d.get('ctValCcy', 'BTC'),
+            }
+
+        self._instrument_specs[symbol] = spec
+        logger.info(f"合约规格 {symbol}: ctVal={spec['ctVal']} lotSz={spec['lotSz']} "
+                    f"minSz={spec['minSz']} ctValCcy={spec['ctValCcy']}")
+        return spec
+
+    def align_sz(self, symbol: str, raw_sz: float) -> float:
+        """
+        把任意 sz 数量按 lotSz 步长取整，并保证 >= minSz。
+        返回调整后的 sz（OKX sz 的单位是合约张数）。
+        """
+        spec = self.get_instrument_spec(symbol)
+        lot_sz = spec['lotSz']
+        min_sz = spec['minSz']
+
+        # 步长对齐：round(raw / lot) * lot
+        if lot_sz > 0:
+            lots = round(raw_sz / lot_sz)
+            aligned = lots * lot_sz
+        else:
+            aligned = raw_sz
+
+        # 最小下单量保护
+        if aligned < min_sz:
+            logger.warning(
+                f"对齐后的 sz={aligned} 低于 minSz={min_sz} ({symbol})，"
+                f"原始={raw_sz:.6f} → 自动调整为 {min_sz}"
+            )
+            aligned = min_sz
+
+        # 浮点尾巴清理（避免 0.030000000000000002 之类的表示误差）
+        aligned = float(f"{aligned:.10f}".rstrip('0').rstrip('.'))
+        return aligned
+
+    def size_margin_to_lots(self, symbol: str, margin_usdt: float,
+                            price: float, leverage: int) -> float:
+        """
+        把"保证金 USDT"换算成 OKX sz（合约张数）。
+
+        公式：
+            名义价值 USDT   = margin_usdt × leverage
+            标的货币数量 BTC = 名义价值 / price
+            合约张数        = 标的货币数量 / ctVal
+
+        返回 raw（未对齐步长）的张数。调用方应再走 align_sz() 落盘到 lotSz 倍数。
+        """
+        spec = self.get_instrument_spec(symbol)
+        ct_val = spec['ctVal']
+        if price <= 0 or ct_val <= 0 or leverage <= 0:
+            return 0.0
+        notional_usdt = margin_usdt * leverage
+        coin_qty = notional_usdt / price
+        lots = coin_qty / ct_val
+        return lots
 
     def get_balance(self) -> Dict[str, Any]:
         """获取账户余额（统一调用 OKX API，模拟盘也走 demo 接口）"""

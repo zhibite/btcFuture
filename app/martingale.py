@@ -230,8 +230,11 @@ class MartingaleStrategy:
         self.logger.info(f"[OPEN] 开仓{side_str} @ {self.last_price:.2f}")
 
         # 计算仓位大小
-        size = self._calculate_position_size(0)
-        contract_size = size * self.last_price / self.config.leverage
+        margin_usdt = self._calculate_position_size(0)   # 保证金 USDT
+        raw_lots = self.client.size_margin_to_lots(
+            self.config.symbol, margin_usdt, self.last_price, self.config.leverage
+        )
+        contract_size = self.client.align_sz(self.config.symbol, raw_lots)
 
         # 下单
         order_id = self.client.place_order(
@@ -302,8 +305,11 @@ class MartingaleStrategy:
         self.logger.info(f"[ADD] 加仓 #{self.position.dca_count + 1} @ {self.last_price:.2f}")
 
         # 计算新仓位
-        size = self._calculate_position_size(self.position.dca_count + 1)
-        contract_size = size * self.last_price / self.config.leverage
+        margin_usdt = self._calculate_position_size(self.position.dca_count + 1)
+        raw_lots = self.client.size_margin_to_lots(
+            self.config.symbol, margin_usdt, self.last_price, self.config.leverage
+        )
+        contract_size = self.client.align_sz(self.config.symbol, raw_lots)
 
         # 下单
         order_id = self.client.place_order(
@@ -402,12 +408,16 @@ class MartingaleStrategy:
 
         self.logger.info(f"[CLOSE] 平仓 @ {self.last_price:.2f}")
 
+        # self.position.total_size 已经是合约张数（_open_position / _add_position 写入时对齐过 lotSz）
+        # 这里再做一次对齐保险，避免浮点漂移或恢复持仓时步长不匹配
+        close_size = self.client.align_sz(self.config.symbol, self.position.total_size)
+
         # 下单平仓
         order_id = self.client.place_order(
             symbol=self.config.symbol,
             side=self._get_close_side(),
             order_type="market",
-            size=str(self.position.total_size),
+            size=str(close_size),
             reduce_only=True
         )
 
@@ -617,21 +627,19 @@ class MartingaleStrategy:
 
     def estimate_required_capital(self) -> Dict[str, Any]:
         """
-        估算所需资金
+        估算所需资金（单位：USDT 保证金）。
 
-        Returns:
-            资金估算
+        注意：_calculate_position_size 返回的就是本层"保证金 USDT"，
+        所以累加本身就是首单 ~ 第 N 单需要的总保证金。无需再除以杠杆。
         """
         costs = []
         total_margin = 0.0
 
         for i in range(self.config.max_dca_count + 1):
-            size = self._calculate_position_size(i)
-            margin = size / self.config.leverage
+            margin = self._calculate_position_size(i)   # 保证金 USDT
             total_margin += margin
             costs.append({
                 'level': i,
-                'order_size': size,
                 'margin': margin,
                 'cumulative_margin': total_margin
             })

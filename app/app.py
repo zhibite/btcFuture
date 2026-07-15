@@ -210,6 +210,47 @@ def initialize_trading():
         auto_loop=config.get('AUTO_LOOP', False),
         direction=config.get('DIRECTION', 'long')
     )
+
+    # 预加载合约规格 + 首单不变量检查（防止 _open_position 算出 0.5 张之类被 OKX 拒）
+    symbol = strategy_config.symbol
+    try:
+        spec = _state.client.get_instrument_spec(symbol)
+        ct_val = spec['ctVal']
+        lot_sz = spec['lotSz']
+        min_sz = spec['minSz']
+        _state.client.logger.info(
+            f"[INSTRUMENT] {symbol}: ctVal={ct_val} lotSz={lot_sz} "
+            f"minSz={min_sz} ctValCcy={spec.get('ctValCcy')}"
+        )
+
+        # 用当前已知价格估算首单名义价值（如果能拿到）
+        try:
+            ref_price = _state.client.get_current_price(symbol)
+        except Exception:
+            ref_price = 0.0
+
+        if ref_price > 0:
+            first_margin = strategy_config.first_order_size
+            min_margin_for_min_sz = (min_sz * ct_val * ref_price) / strategy_config.leverage
+            _state.client.logger.info(
+                f"[CHECK] 首单 {first_margin} USDT @ {strategy_config.leverage}x "
+                f"@ {ref_price:.2f} → "
+                f"最小可下单名义={min_sz * ct_val * ref_price:.4f} USDT / "
+                f"所需保证金={min_margin_for_min_sz:.4f} USDT"
+            )
+            if first_margin < min_margin_for_min_sz:
+                warn_msg = (
+                    f"⚠️  首单 {first_margin} USDT 保证金低于最小可下单量 "
+                    f"{min_margin_for_min_sz:.4f} USDT (minSz={min_sz} lotSz={lot_sz})。"
+                    f"实盘会被 OKX 拒（51119/51008 等）。"
+                    f"建议把 FIRST_ORDER_SIZE 调到 >= {min_margin_for_min_sz:.2f}。"
+                )
+                _state.client.logger.warning(warn_msg)
+                _state.startup_warnings = getattr(_state, 'startup_warnings', [])
+                _state.startup_warnings.append(warn_msg)
+    except Exception as e:
+        _state.client.logger.warning(f"[INSTRUMENT] 预加载合约规格失败：{e}")
+
     _state.strategy = MartingaleStrategy(
         client=_state.client,
         risk_manager=_state.risk_manager,
@@ -404,6 +445,10 @@ async def get_status(refresh_price: bool = True, refresh_balance: bool = True):
             "target_profit_price": _state.strategy.get_target_profit_price(),
             "breakeven_price": _state.strategy.get_breakeven_price()
         },
+        "startup_warnings": getattr(_state, 'startup_warnings', []),
+        "instrument_spec": getattr(_state.client, '_instrument_specs', {}).get(
+            _state.strategy.config.symbol, {}
+        ),
         "stats": _state.strategy.stats
     }
 
