@@ -51,7 +51,7 @@ class OKXClient:
         return datetime.utcnow().isoformat() + 'Z'
 
     def _sign(self, timestamp: str, method: str, path: str,
-              body: str = "") -> str:
+              query_string: str = "", body: str = "") -> str:
         """
         生成签名
 
@@ -59,12 +59,14 @@ class OKXClient:
             timestamp: 时间戳
             method: HTTP方法
             path: 请求路径
+            query_string: 排序后的 query string (e.g. "ccy=USDT")
             body: 请求体
 
         Returns:
             签名字符串
         """
-        message = timestamp + method + path + body
+        request_path = path + ('?' + query_string if query_string else '')
+        message = timestamp + method + request_path + body
         mac = hmac.new(
             self.secret_key.encode('utf-8'),
             message.encode('utf-8'),
@@ -89,9 +91,15 @@ class OKXClient:
         timestamp = self._get_timestamp()
         url = self.base_url + path
 
+        # 构造 query string 并按 key 排序（OKX 签名要求）
+        query_string = ''
+        if params:
+            sorted_items = sorted(params.items())
+            query_string = '&'.join([f"{k}={v}" for k, v in sorted_items])
+
         # 构建请求体
         body_str = json.dumps(body) if body else ""
-        sign = self._sign(timestamp, method, path, body_str)
+        sign = self._sign(timestamp, method, path, query_string, body_str)
 
         headers = {
             'OK-ACCESS-KEY': self.api_key,
@@ -102,7 +110,8 @@ class OKXClient:
 
         try:
             if method == 'GET':
-                response = self.session.get(url, params=params, headers=headers)
+                full_url = url + ('?' + query_string if query_string else '')
+                response = self.session.get(full_url, headers=headers)
             elif method == 'POST':
                 response = self.session.post(url, json=body, headers=headers)
             elif method == 'DELETE':
