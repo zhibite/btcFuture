@@ -150,9 +150,10 @@ class OKXClient:
                 }]
             }
 
+        # OKX balance 接口：GET 请求不需要 body，ccy 作为 query param
         path = "/api/v5/account/balance"
-        body = {"ccy": "USDT"}
-        return self._request('GET', path, body=body)
+        params = {"ccy": "USDT"}
+        return self._request('GET', path, params=params)
 
     def get_ticker(self, symbol: str) -> Optional[Dict[str, Any]]:
         """

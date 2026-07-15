@@ -149,10 +149,25 @@ def initialize_trading():
     )
 
     # 恢复余额
-    if saved_balance is not None:
-        _state.client.sim_balance = saved_balance
-    elif config.get('SIMULATION', True):
-        _state.client.reset_sim_balance(initial_balance)
+    if not config.get('SIMULATION', True):
+        # 实盘模式：直接读取 OKX 真实接口的余额，不存数据库
+        balance_resp = _state.client.get_balance()
+        try:
+            if balance_resp.get('code') == '0' and balance_resp.get('data'):
+                _state.client.sim_balance = float(balance_resp['data'][0].get('totalEq', 0))
+            elif saved_balance is not None:
+                # 接口失败时 fallback 到 DB（仅作临时显示）
+                _state.client.sim_balance = saved_balance
+        except Exception as e:
+            print(f"获取真实余额失败: {e}")
+            if saved_balance is not None:
+                _state.client.sim_balance = saved_balance
+    else:
+        # 模拟模式：使用数据库或初始余额
+        if saved_balance is not None:
+            _state.client.sim_balance = saved_balance
+        else:
+            _state.client.reset_sim_balance(initial_balance)
 
     # 创建风控
     risk_config = RiskConfig(
@@ -260,7 +275,18 @@ async def get_status():
         initialize_trading()
 
     pos = _state.strategy.position
-    balance = _state.client.get_sim_balance()
+    # 非模拟模式：调用真实 OKX 接口获取账户余额
+    if not _state.config.get('SIMULATION', True):
+        balance_resp = _state.client.get_balance()
+        try:
+            if balance_resp.get('code') == '0' and balance_resp.get('data'):
+                balance = float(balance_resp['data'][0].get('totalEq', 0))
+            else:
+                balance = 0
+        except Exception:
+            balance = 0
+    else:
+        balance = _state.client.get_sim_balance()
     current_price = _state.market.get_price() if _state.market else _state.client.get_current_price(_state.config.get('SYMBOL', 'BTC-USDT-SWAP'))
     risk_status = _state.risk_manager.check_loss_risk(balance)
 
