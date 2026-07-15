@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  btc-future:
+    build: .
+    restart: always
+    ports:
+      - "8037:8037"
+    volumes:
+      - btc_future_data:/data
+    environment:
+      - DATABASE_PATH=/data/btc_future.db
+      - SIMULATION=true
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8037/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  btc_future_data:
+    driver: local

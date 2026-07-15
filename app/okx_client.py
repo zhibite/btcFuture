@@ -415,3 +415,14 @@ class OKXClient:
     def reset_sim_balance(self, amount: float = 2000.0):
         """重置模拟账户余额"""
         self.sim_balance = amount
+
+    def load_balance_from_db(self, db) -> float:
+        """从数据库加载余额"""
+        saved_balance = db.get_balance()
+        if saved_balance is not None:
+            self.sim_balance = saved_balance
+        return self.sim_balance
+
+    def save_balance_to_db(self, db):
+        """保存余额到数据库"""
+        db.set_balance(self.sim_balance)

@@ -1,0 +1,20 @@
+# Coolify Deployment Configuration
+# Place this file in the root of your project
+
+# Docker Compose for Coolify
+services:
+  btc-future:
+    image: ghcr.io/zhibite/btcfuture:latest
+    restart: always
+    ports:
+      - "8037:8037"
+    volumes:
+      - btc_future_data:/data
+    environment:
+      - DATABASE_PATH=/data/btc_future.db
+    env_file:
+      - .env
+
+volumes:
+  btc_future_data:
+    driver: local

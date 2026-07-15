@@ -23,7 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /install /usr/local
 COPY app/ .
 
-RUN mkdir -p /app/data && chown -R appuser:appuser /app
+# Create data directory for persistent storage
+RUN mkdir -p /data && chown -R appuser:appuser /data /app
 
 USER appuser
 
@@ -31,5 +32,9 @@ EXPOSE 8037
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+ENV DATABASE_PATH=/data/btc_future.db
+
+# Coolify deployment: Mount /data as a persistent volume
+# Example: docker run -v btc_future_data:/data ...
 
 CMD ["python", "app.py"]

@@ -23,6 +23,7 @@ import uvicorn
 from okx_client import OKXClient
 from risk_manager import RiskManager, RiskConfig
 from martingale import MartingaleStrategy, MartingaleConfig, SimulatedMarket
+from database import Database, get_db
 
 
 # ============ 全局状态 ============
@@ -54,13 +55,13 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
-# ============ 配置加载 ============
+# ============ 配置加载/保存 ============
 def load_config() -> Dict[str, Any]:
-    """加载配置文件"""
+    """从YAML文件加载基础配置"""
     config_path = BASE_DIR / "config.yaml"
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
+            return yaml.safe_load(f) or {}
     except FileNotFoundError:
         return {
             'SIMULATION': True,
@@ -74,21 +75,61 @@ def load_config() -> Dict[str, Any]:
             'MAX_LOSS_RATE': 0.25,
             'TREND_PAUSE_RATE': 0.05,
             'TOTAL_CAPITAL': 2000,
-            'AUTO_LOOP': False
+            'AUTO_LOOP': False,
+            'DIRECTION': 'long',
+            'API_KEY': '',
+            'SECRET_KEY': '',
+            'PASSPHRASE': ''
         }
 
 
+def load_persistent_config() -> Dict[str, Any]:
+    """从数据库加载持久化配置"""
+    db = get_db()
+    return db.get_all_config()
+
+
+def save_config_to_db(config: Dict[str, Any]):
+    """保存配置到数据库"""
+    db = get_db()
+    db.set_all_config(config)
+
+
 def save_config(config: Dict[str, Any]):
-    """保存配置"""
+    """保存配置到YAML文件"""
     config_path = BASE_DIR / "config.yaml"
     with open(config_path, 'w', encoding='utf-8') as f:
         yaml.dump(config, f, allow_unicode=True)
 
 
+def get_merged_config() -> Dict[str, Any]:
+    """获取合并后的配置（YAML + 数据库，数据库优先）"""
+    yaml_config = load_config()
+    db_config = load_persistent_config()
+    # 合并配置，数据库中的值覆盖YAML中的值
+    merged = {**yaml_config, **db_config}
+    return merged
+
+
 def initialize_trading():
     """初始化交易组件"""
-    config = load_config()
+    # 加载合并配置
+    config = get_merged_config()
+
+    # 如果数据库没有配置，从YAML加载默认值
+    if not db_config := load_persistent_config():
+        # 首次使用，加载YAML默认值并保存到数据库
+        yaml_defaults = load_config()
+        if yaml_defaults:
+            save_config_to_db(yaml_defaults)
+            config = yaml_defaults
+
     _state.config = config
+
+    # 获取数据库中的余额（如果存在）
+    db = get_db()
+    saved_balance = db.get_balance()
+    initial_balance = config.get('TOTAL_CAPITAL', 2000)
 
     # 创建客户端
     _state.client = OKXClient(
@@ -98,19 +139,22 @@ def initialize_trading():
         simulation=config.get('SIMULATION', True)
     )
 
-    if config.get('SIMULATION', True):
-        _state.client.reset_sim_balance(config.get('TOTAL_CAPITAL', 2000))
+    # 恢复余额
+    if saved_balance is not None:
+        _state.client.sim_balance = saved_balance
+    elif config.get('SIMULATION', True):
+        _state.client.reset_sim_balance(initial_balance)
 
     # 创建风控
     risk_config = RiskConfig(
         max_loss_rate=config.get('MAX_LOSS_RATE', 0.25),
         max_drawdown=0.30,
         trend_pause_rate=config.get('TREND_PAUSE_RATE', 0.05),
-        min_balance=config.get('TOTAL_CAPITAL', 2000) * 0.2
+        min_balance=initial_balance * 0.2
     )
     _state.risk_manager = RiskManager(
         config=risk_config,
-        initial_balance=config.get('TOTAL_CAPITAL', 2000)
+        initial_balance=initial_balance
     )
 
     # 创建策略
@@ -132,8 +176,38 @@ def initialize_trading():
     )
     _state.strategy.initialize()
 
+    # 恢复策略状态
+    saved_position = db.get_state('current_position')
+    if saved_position and not _state.strategy.position.is_empty():
+        # 恢复持仓信息
+        _state.strategy.position.side = saved_position.get('side', 'none')
+        _state.strategy.position.total_size = saved_position.get('total_size', 0)
+        _state.strategy.position.avg_price = saved_position.get('avg_price', 0)
+
     # 创建模拟市场
     _state.market = SimulatedMarket(initial_price=65000.0, volatility=0.001)
+
+
+def save_state():
+    """保存当前状态到数据库"""
+    if not _state.client:
+        return
+
+    db = get_db()
+
+    # 保存余额
+    db.set_balance(_state.client.get_sim_balance())
+
+    # 保存持仓状态
+    if _state.strategy and not _state.strategy.position.is_empty():
+        pos = _state.strategy.position
+        db.set_state('current_position', {
+            'side': pos.side.value,
+            'total_size': pos.total_size,
+            'avg_price': pos.avg_price,
+            'dca_count': pos.dca_count,
+            'first_entry_price': pos.first_entry_price
+        })
 
 
 # ============ 路由定义 ============
@@ -142,6 +216,12 @@ def initialize_trading():
 async def startup_event():
     """应用启动"""
     initialize_trading()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭时保存状态"""
+    save_state()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -233,8 +313,16 @@ async def get_status():
 @app.get("/api/trades")
 async def get_trades():
     """获取交易记录"""
-    trades = _state.strategy.recorder.trades if _state.strategy else []
-    summary = _state.strategy.recorder.get_summary() if _state.strategy else {}
+    db = get_db()
+
+    # 尝试从数据库获取
+    trades = db.get_trades()
+    summary = db.get_trades_summary()
+
+    # 如果数据库为空，尝试从内存获取
+    if not trades and _state.strategy:
+        trades = _state.strategy.recorder.trades
+        summary = _state.strategy.recorder.get_summary()
 
     return {
         "success": True,
@@ -253,33 +341,33 @@ async def get_config():
 
 
 @app.post("/api/config")
-async def update_config(
-    leverage: int = Form(...),
-    first_order_size: float = Form(...),
-    multiplier: float = Form(...),
-    price_interval: float = Form(...),
-    max_dca_count: int = Form(...),
-    take_profit: float = Form(...),
-    max_loss_rate: float = Form(...),
-    auto_loop: bool = Form(False),
-    direction: str = Form("long")
-):
+async def update_config(request: Request):
     """更新配置"""
+    body = await request.json()
+
     config = _state.config.copy()
     config.update({
-        'LEVERAGE': leverage,
-        'FIRST_ORDER_SIZE': first_order_size,
-        'MULTIPLIER': multiplier,
-        'PRICE_INTERVAL': price_interval,
-        'MAX_DCA_COUNT': max_dca_count,
-        'TAKE_PROFIT': take_profit,
-        'MAX_LOSS_RATE': max_loss_rate,
-        'AUTO_LOOP': auto_loop,
-        'DIRECTION': direction
+        'API_KEY': body.get('api_key', ''),
+        'SECRET_KEY': body.get('secret_key', ''),
+        'PASSPHRASE': body.get('passphrase', ''),
+        'SIMULATION': body.get('simulation', True),
+        'LEVERAGE': body.get('leverage', 2),
+        'FIRST_ORDER_SIZE': body.get('first_order_size', 10),
+        'MULTIPLIER': body.get('multiplier', 1.5),
+        'PRICE_INTERVAL': body.get('price_interval', 0.008),
+        'MAX_DCA_COUNT': body.get('max_dca_count', 7),
+        'TAKE_PROFIT': body.get('take_profit', 0.02),
+        'MAX_LOSS_RATE': body.get('max_loss_rate', 0.25),
+        'AUTO_LOOP': body.get('auto_loop', False),
+        'DIRECTION': body.get('direction', 'long')
     })
 
-    save_config(config)
+    # 保存到数据库（持久化）
+    save_config_to_db(config)
     _state.config = config
+
+    # 同时保存到YAML（备份）
+    save_config(config)
 
     # 重新初始化策略
     initialize_trading()
@@ -299,6 +387,9 @@ async def action_open():
     _state.strategy.last_price = _state.market.get_price()
     success = _state.strategy.check_and_open()
 
+    # 保存状态
+    save_state()
+
     return {
         "success": success,
         "message": "开仓成功" if success else "开仓失败"
@@ -317,6 +408,9 @@ async def action_close():
     _state.strategy.last_price = _state.market.get_price()
     success = _state.strategy._close_position()
 
+    # 保存状态
+    save_state()
+
     return {
         "success": success,
         "message": "平仓成功" if success else "平仓失败"
@@ -334,6 +428,9 @@ async def action_add():
 
     _state.strategy.last_price = _state.market.get_price()
     success = _state.strategy.check_and_add_position()
+
+    # 保存状态
+    save_state()
 
     return {
         "success": success,
@@ -358,6 +455,14 @@ async def action_reset():
         'total_loss': 0.0,
         'start_time': time.time()
     }
+
+    # 保存重置后的余额
+    save_state()
+
+    # 清空交易记录
+    db = get_db()
+    db.clear_trades()
+    db.set_state('current_position', None)
 
     return {"success": True, "message": f"余额已重置为 {initial} USDT"}
 
@@ -388,6 +493,9 @@ async def simulate_price(action: str = Form(...)):
 
     # 运行策略逻辑
     _state.strategy.run_one_cycle()
+
+    # 保存状态
+    save_state()
 
     return {
         "success": True,

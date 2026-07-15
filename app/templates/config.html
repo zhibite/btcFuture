@@ -11,6 +11,37 @@
         </div>
 
         <form id="configForm" class="space-y-6">
+            <!-- OKX API 配置 -->
+            <div class="border-b border-gray-700 pb-4">
+                <h3 class="text-md font-medium mb-4 text-primary">OKX API 配置</h3>
+
+                <div class="grid grid-cols-1 gap-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">API Key</label>
+                        <input type="text" name="api_key" id="api_key" placeholder="请输入 API Key"
+                            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:border-primary focus:outline-none">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Secret Key</label>
+                        <input type="password" name="secret_key" id="secret_key" placeholder="请输入 Secret Key"
+                            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:border-primary focus:outline-none">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Passphrase</label>
+                        <input type="password" name="passphrase" id="passphrase" placeholder="请输入 Passphrase"
+                            class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:border-primary focus:outline-none">
+                    </div>
+
+                    <div class="flex items-center">
+                        <input type="checkbox" name="simulation" id="simulation" checked
+                            class="w-5 h-5 rounded bg-gray-700 border-gray-600 text-primary focus:ring-primary focus:ring-offset-0">
+                        <label for="simulation" class="ml-2 text-sm">模拟盘模式（不进行真实交易）</label>
+                    </div>
+                </div>
+            </div>
+
             <!-- 基本参数 -->
             <div class="border-b border-gray-700 pb-4">
                 <h3 class="text-md font-medium mb-4 text-primary">基本参数</h3>
@@ -188,6 +219,14 @@
             const data = await res.json();
             if (data.success) {
                 const config = data.config;
+
+                // API 配置
+                document.getElementById('api_key').value = config.API_KEY || '';
+                document.getElementById('secret_key').value = config.SECRET_KEY || '';
+                document.getElementById('passphrase').value = config.PASSPHRASE || '';
+                document.getElementById('simulation').checked = config.SIMULATION !== false;
+
+                // 策略参数
                 document.getElementById('leverage').value = config.LEVERAGE || 2;
                 document.getElementById('first_order_size').value = config.FIRST_ORDER_SIZE || 10;
                 document.getElementById('multiplier').value = config.MULTIPLIER || 1.5;
@@ -208,6 +247,8 @@
     }
 
     function resetToDefault() {
+        // API 配置不清空，保留用户输入
+        document.getElementById('simulation').checked = true;
         document.getElementById('leverage').value = 2;
         document.getElementById('first_order_size').value = 10;
         document.getElementById('multiplier').value = 1.5;
@@ -225,6 +266,12 @@
 
         const formData = new FormData(e.target);
         const data = {
+            // API 配置
+            api_key: formData.get('api_key') || '',
+            secret_key: formData.get('secret_key') || '',
+            passphrase: formData.get('passphrase') || '',
+            simulation: formData.get('simulation') === 'on',
+            // 策略参数
             leverage: parseInt(formData.get('leverage')),
             first_order_size: parseFloat(formData.get('first_order_size')),
             multiplier: parseFloat(formData.get('multiplier')),
@@ -239,8 +286,8 @@
         try {
             const res = await fetch('/api/config', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: new URLSearchParams(data)
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
             });
             const result = await res.json();
             if (result.success) {
