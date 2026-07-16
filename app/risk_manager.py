@@ -71,13 +71,15 @@ class RiskManager:
         self.entry_price = price
 
     def check_trend_risk(self, current_price: float,
-                         base_price: float) -> bool:
+                         base_price: float,
+                         direction: str = "long") -> bool:
         """
         检查趋势风险
 
         Args:
             current_price: 当前价格
             base_price: 参考基准价格
+            direction: 策略方向 'long' / 'short'。做空策略下，价格大幅下跌才算趋势风险
 
         Returns:
             True 如果趋势危险，需要暂停开仓
@@ -85,10 +87,13 @@ class RiskManager:
         if base_price <= 0:
             return False
 
-        # 计算价格上涨幅度
-        price_change = (current_price - base_price) / base_price
+        # 做空策略下，价格下跌才是"危险的反向趋势"，与做多相反
+        if direction == "short":
+            price_change = (base_price - current_price) / base_price
+        else:
+            price_change = (current_price - base_price) / base_price
 
-        # 如果价格上涨超过阈值，标记为趋势风险
+        # 如果反向变动超过阈值，标记为趋势风险
         if price_change >= self.config.trend_pause_rate:
             return True
 
@@ -139,38 +144,51 @@ class RiskManager:
             status.level = RiskLevel.SAFE
             status.message = f"账户正常，亏损 {status.current_loss_rate*100:.2f}%"
 
+        # 后面三项 CRITICAL 触发条件：只在当前等级还不够严重时升级并覆盖 message，
+        # 否则保留前一段更具体的信息（如"硬止损线"）。
+        def _upgrade_to_critical(level, msg):
+            # 用枚举值的"严重度"做比较：SAFE < WARNING < DANGER < CRITICAL
+            order = {RiskLevel.SAFE: 0, RiskLevel.WARNING: 1, RiskLevel.DANGER: 2, RiskLevel.CRITICAL: 3}
+            if order[level] < order[RiskLevel.CRITICAL]:
+                status.level = RiskLevel.CRITICAL
+                status.emergency_exit = True
+                status.message = msg
+
         # 检查回撤风险
         if status.current_drawdown >= self.config.max_drawdown:
-            status.level = RiskLevel.CRITICAL
-            status.emergency_exit = True
-            status.message = f"回撤达到 {status.current_drawdown*100:.2f}%，触发强制平仓"
-            status.emergency_exit = True
+            _upgrade_to_critical(
+                status.level,
+                f"回撤达到 {status.current_drawdown*100:.2f}%，触发强制平仓"
+            )
 
         # 检查余额是否低于最低要求
         if current_balance < self.config.min_balance:
-            status.level = RiskLevel.CRITICAL
-            status.emergency_exit = True
-            status.message = f"余额 {current_balance:.2f} 低于最低要求 {self.config.min_balance}"
+            _upgrade_to_critical(
+                status.level,
+                f"余额 {current_balance:.2f} 低于最低要求 {self.config.min_balance}"
+            )
 
         status.emergency_exit = status.emergency_exit or self.config.emergency_exit
 
         return status
 
     def can_open_position(self, current_price: float,
-                          reference_price: float) -> tuple[bool, str]:
+                          reference_price: float,
+                          direction: str = "long") -> tuple[bool, str]:
         """
         检查是否可以开仓
 
         Args:
             current_price: 当前价格
             reference_price: 参考价格
+            direction: 策略方向 'long' / 'short'
 
         Returns:
             (是否可以开仓, 原因)
         """
         # 检查趋势风险
-        if self.check_trend_risk(current_price, reference_price):
-            return False, f"价格上涨超过 {self.config.trend_pause_rate*100}%，趋势风险暂停开仓"
+        if self.check_trend_risk(current_price, reference_price, direction):
+            return False, f"价格反向变动超过 {self.config.trend_pause_rate*100}%，趋势风险暂停开仓"
 
         # 检查紧急退出标志
         if self.config.emergency_exit:

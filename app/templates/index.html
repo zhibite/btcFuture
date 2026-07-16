@@ -42,6 +42,12 @@
     <a href="/config" class="text-primary hover:underline text-xs">切换模式 →</a>
 </div>
 
+<!-- 启动警告 (fallback / 首单过小 / 账户配置缺失等) -->
+<div id="startupWarnings" class="hidden mb-6 px-4 py-3 rounded-lg border bg-orange-900/30 border-orange-600 text-sm text-orange-200 space-y-2">
+    <div class="font-semibold">⚠️ 启动检测到以下问题，请确认是否影响交易：</div>
+    <ul id="startupWarningsList" class="list-disc list-inside text-xs space-y-1"></ul>
+</div>
+
 <!-- 持仓详情 -->
 <div id="positionDetail" class="bg-gray-800 rounded-lg p-6 border border-gray-700 mb-6 hidden">
     <h2 class="text-lg font-semibold mb-4">当前持仓详情</h2>
@@ -347,6 +353,20 @@
         const netPnlEl = document.getElementById('statNetPnl');
         netPnlEl.textContent = netPnl.toFixed(2) + ' U';
         netPnlEl.className = netPnl >= 0 ? 'text-xl font-bold text-success' : 'text-xl font-bold text-danger';
+
+        // 启动警告（如 fallback、首单过小、账户配置缺失等）
+        const warnBox = document.getElementById('startupWarnings');
+        const warnList = document.getElementById('startupWarningsList');
+        if (warnBox && warnList) {
+            const warns = d.startup_warnings || [];
+            if (warns.length > 0) {
+                warnList.innerHTML = warns.map(w => '<li>' + String(w).replace(/⚠️/g, '').trim() + '</li>').join('');
+                warnBox.classList.remove('hidden');
+            } else {
+                warnList.innerHTML = '';
+                warnBox.classList.add('hidden');
+            }
+        }
     }
 
     // 操作按钮

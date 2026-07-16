@@ -80,15 +80,80 @@ class Database:
                 )
             ''')
 
-            # 余额表（模拟账户余额）
+            # 余额表（v2：按 mode 拆分 simulation/live，避免互相覆盖）
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS balance (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                CREATE TABLE IF NOT EXISTS balance_v2 (
+                    mode TEXT PRIMARY KEY,
                     balance REAL NOT NULL,
                     initial_balance REAL NOT NULL,
                     updated_at TEXT NOT NULL
                 )
             ''')
+
+            # schema 元信息：保存当前版本号
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS schema_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            ''')
+            cursor.execute(
+                'INSERT OR IGNORE INTO schema_meta (key, value, updated_at) VALUES (?, ?, ?)',
+                ('version', '0', datetime.now().isoformat())
+            )
+
+        # 迁移：把旧 balance 表（单行 id=1）按当前激活 mode 复制到 balance_v2
+        self._migrate_balance_v2_if_needed()
+
+    def _migrate_balance_v2_if_needed(self):
+        """v2 schema 迁移：把旧的单行 balance 表按 active_mode 复制"""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+
+            cursor.execute('SELECT value FROM schema_meta WHERE key = ?', ('version',))
+            row = cursor.fetchone()
+            current_version = int(row['value']) if row else 0
+            if current_version >= 2:
+                return
+
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='balance'"
+            )
+            has_old = cursor.fetchone() is not None
+            if not has_old:
+                cursor.execute(
+                    "UPDATE schema_meta SET value=?, updated_at=? WHERE key='version'",
+                    ('2', datetime.now().isoformat())
+                )
+                return
+
+            cursor.execute('SELECT balance, initial_balance FROM balance WHERE id = 1')
+            old = cursor.fetchone()
+            if old:
+                # 决定归到哪个 mode：取当前激活 mode（默认 simulation）
+                cursor.execute(
+                    "SELECT value FROM config WHERE key = 'active_mode'"
+                )
+                mode_row = cursor.fetchone()
+                try:
+                    mode = json.loads(mode_row['value']) if mode_row else 'simulation'
+                except Exception:
+                    mode = 'simulation'
+                if mode not in ('simulation', 'live'):
+                    mode = 'simulation'
+
+                cursor.execute(
+                    'INSERT OR IGNORE INTO balance_v2 (mode, balance, initial_balance, updated_at) '
+                    'VALUES (?, ?, ?, ?)',
+                    (mode, old['balance'], old['initial_balance'], datetime.now().isoformat())
+                )
+
+            cursor.execute('DROP TABLE IF EXISTS balance')
+            cursor.execute(
+                "UPDATE schema_meta SET value=?, updated_at=? WHERE key='version'",
+                ('2', datetime.now().isoformat())
+            )
 
     # ============ 配置管理 ============
 
@@ -202,36 +267,49 @@ class Database:
             ''', (key, json.dumps(value), datetime.now().isoformat(),
                   json.dumps(value), datetime.now().isoformat()))
 
-    # ============ 余额管理 ============
+    # ============ 余额管理（按 mode 拆分） ============
 
-    def get_balance(self) -> Optional[float]:
-        """获取余额"""
+    def _validate_mode(self, mode: str) -> str:
+        if mode not in ('simulation', 'live'):
+            raise ValueError(f"Invalid mode: {mode}")
+        return mode
+
+    def get_balance(self, mode: str = 'simulation') -> Optional[float]:
+        """获取指定模式的余额"""
+        self._validate_mode(mode)
         with self._get_conn() as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT balance FROM balance WHERE id = 1')
+            cursor.execute('SELECT balance FROM balance_v2 WHERE mode = ?', (mode,))
             row = cursor.fetchone()
             return row['balance'] if row else None
 
-    def set_balance(self, balance: float, initial_balance: float = None):
-        """设置余额"""
+    def set_balance(self, balance: float, mode: str = 'simulation',
+                    initial_balance: float = None):
+        """设置指定模式的余额"""
+        self._validate_mode(mode)
         with self._get_conn() as conn:
             cursor = conn.cursor()
             if initial_balance is None:
-                cursor.execute('SELECT initial_balance FROM balance WHERE id = 1')
+                cursor.execute(
+                    'SELECT initial_balance FROM balance_v2 WHERE mode = ?', (mode,)
+                )
                 row = cursor.fetchone()
                 initial_balance = row['initial_balance'] if row else 2000.0
             cursor.execute('''
-                INSERT INTO balance (id, balance, initial_balance, updated_at)
-                VALUES (1, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET balance = ?, updated_at = ?
-            ''', (balance, initial_balance, datetime.now().isoformat(),
+                INSERT INTO balance_v2 (mode, balance, initial_balance, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(mode) DO UPDATE SET balance = ?, updated_at = ?
+            ''', (mode, balance, initial_balance, datetime.now().isoformat(),
                   balance, datetime.now().isoformat()))
 
-    def get_initial_balance(self) -> float:
-        """获取初始余额"""
+    def get_initial_balance(self, mode: str = 'simulation') -> float:
+        """获取指定模式的初始余额"""
+        self._validate_mode(mode)
         with self._get_conn() as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT initial_balance FROM balance WHERE id = 1')
+            cursor.execute(
+                'SELECT initial_balance FROM balance_v2 WHERE mode = ?', (mode,)
+            )
             row = cursor.fetchone()
             return row['initial_balance'] if row else 2000.0
 

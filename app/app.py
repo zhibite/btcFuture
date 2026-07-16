@@ -6,15 +6,14 @@ OKX 期货马丁格尔策略 - FastAPI Web服务
 import os
 import sys
 import time
-import json
 import yaml
 import asyncio
 from datetime import datetime
 from typing import Optional, Dict, Any
 from pathlib import Path
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, Form, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, Form
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import uvicorn
@@ -58,7 +57,6 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 # ============ 自定义 template renderer ============
 def render_template(template_name: str, request: Request = None, **context):
     """直接渲染模板返回 HTMLResponse，绕过 TemplateResponse 的缓存 key 问题"""
-    from fastapi.responses import HTMLResponse
     template = templates.get_template(template_name)
     return HTMLResponse(template.render(request=request, **context))
 
@@ -151,9 +149,8 @@ def initialize_trading():
     mode = get_active_mode()
     config = load_mode_config(mode)
 
-    # 获取数据库中的余额（如果存在）
-    db = get_db()
-    saved_balance = db.get_balance()
+    # 获取数据库中当前 mode 的余额（如果存在）
+    saved_balance = db.get_balance(mode=mode)
     default_initial = config.get('TOTAL_CAPITAL', 2000)
 
     # 创建客户端
@@ -164,27 +161,34 @@ def initialize_trading():
         simulation=config.get('SIMULATION', True)
     )
 
+    # 每次重新初始化都清空 startup_warnings，避免列表无限增长
+    _state.startup_warnings = []
+
     # 恢复余额 - 统一从 OKX API 读取（模拟盘/实盘走同一接口，区别在 header）
     balance_resp = _state.client.get_balance()
     try:
         if isinstance(balance_resp, dict) and balance_resp.get('code') == '0' and balance_resp.get('data'):
-            _state.client.sim_balance = float(balance_resp['data'][0].get('totalEq', 0))
+            real_balance = float(balance_resp['data'][0].get('totalEq', 0))
+            _state.client.cached_balance = real_balance
+            _state.client.sim_balance = real_balance
         elif saved_balance is not None:
+            _state.client.cached_balance = saved_balance
             _state.client.sim_balance = saved_balance
         else:
-            _state.client.reset_sim_balance(default_initial)
+            _state.client.reset_cached_balance(default_initial)
     except Exception as e:
         print(f"获取余额失败: {e}")
         if saved_balance is not None:
+            _state.client.cached_balance = saved_balance
             _state.client.sim_balance = saved_balance
         else:
-            _state.client.reset_sim_balance(default_initial)
+            _state.client.reset_cached_balance(default_initial)
 
     # 初始本金：实盘用第一次 OKX 拉到的真实余额（用户的真实本金），模拟盘用配置默认值
     # 这样亏损率/回撤都从 0% 起算，不会出现"300U 显示 85% 亏损"的误报
     is_live = not config.get('SIMULATION', True)
-    has_real_balance = is_live and _state.client.sim_balance and _state.client.sim_balance > 0
-    initial_balance = _state.client.sim_balance if has_real_balance else default_initial
+    has_real_balance = is_live and _state.client.cached_balance and _state.client.cached_balance > 0
+    initial_balance = _state.client.cached_balance if has_real_balance else default_initial
 
     # 创建风控
     risk_config = RiskConfig(
@@ -221,6 +225,18 @@ def initialize_trading():
             f"[ACCOUNT] posMode={acct_cfg['posMode']} acctLv={acct_cfg.get('acctLv', '')} "
             f"source={acct_cfg.get('_source', '')}"
         )
+        # 实盘若 fallback 到默认值（未知 posMode），必须强提醒：后续下单会出错
+        if (not config.get('SIMULATION', True)
+                and acct_cfg.get('_source') == 'fallback'):
+            warn_msg = (
+                "⚠️  无法从 OKX 拉取真实账户配置（posMode），"
+                "已 fallback 到 'net_mode'。"
+                "若你的真实账户是 long_short_mode（双向持仓），"
+                "首次下单会被 OKX 拒绝（51174）。"
+                "请检查 API Key 是否包含 '读取' 账户配置权限。"
+            )
+            _state.client.logger.warning(warn_msg)
+            _state.startup_warnings.append(warn_msg)
     except Exception as e:
         _state.client.logger.warning(f"[ACCOUNT] 获取账户配置失败：{e}，使用默认 posMode={_state.client._pos_mode}")
 
@@ -257,7 +273,6 @@ def initialize_trading():
                     f"建议把 FIRST_ORDER_SIZE 调到 >= {min_margin_for_min_sz:.2f}。"
                 )
                 _state.client.logger.warning(warn_msg)
-                _state.startup_warnings = getattr(_state, 'startup_warnings', [])
                 _state.startup_warnings.append(warn_msg)
     except Exception as e:
         _state.client.logger.warning(f"[INSTRUMENT] 预加载合约规格失败：{e}")
@@ -276,6 +291,15 @@ def initialize_trading():
         _state.strategy.position.side = saved_position.get('side', 'none')
         _state.strategy.position.total_size = saved_position.get('total_size', 0)
         _state.strategy.position.avg_price = saved_position.get('avg_price', 0)
+        _state.strategy.position.dca_count = saved_position.get('dca_count', 0)
+        _state.strategy.position.first_entry_price = saved_position.get('first_entry_price', 0)
+        _state.strategy.position.first_entry_time = saved_position.get('first_entry_time', '')
+        # last_dca_price 必须同步恢复，否则 get_next_dca_price() 会算出"从 0 跌 0.8%"的错位
+        _state.strategy.last_dca_price = saved_position.get('last_dca_price', saved_position.get('avg_price', 0))
+        _state.strategy.base_price = saved_position.get('base_price', _state.strategy.last_dca_price)
+
+    # 同步 _state.config，给只读路由（/api/status、/api/action/reset）使用
+    _state.config = config
 
     # 创建模拟市场
     _state.market = SimulatedMarket(initial_price=65000.0, volatility=0.001)
@@ -287,9 +311,10 @@ def save_state():
         return
 
     db = get_db()
+    mode = get_active_mode()
 
-    # 保存余额
-    db.set_balance(_state.client.get_sim_balance())
+    # 保存余额（按 mode 拆分）
+    db.set_balance(_state.client.get_cached_balance(), mode=mode)
 
     # 保存持仓状态
     if _state.strategy and not _state.strategy.position.is_empty():
@@ -299,7 +324,10 @@ def save_state():
             'total_size': pos.total_size,
             'avg_price': pos.avg_price,
             'dca_count': pos.dca_count,
-            'first_entry_price': pos.first_entry_price
+            'first_entry_price': pos.first_entry_price,
+            'first_entry_time': pos.first_entry_time,
+            'last_dca_price': _state.strategy.last_dca_price,
+            'base_price': _state.strategy.base_price,
         })
 
 
@@ -386,7 +414,7 @@ async def get_status(refresh_price: bool = True, refresh_balance: bool = True):
             current_price = 0.0
 
     # ---------- 余额 ----------
-    balance = _state.client.sim_balance or 0
+    balance = _state.client.cached_balance or 0
     balance_source = 'local'
     api_ok = bool(_state.client.api_key and _state.client.secret_key and _state.client.passphrase)
 
@@ -395,8 +423,15 @@ async def get_status(refresh_price: bool = True, refresh_balance: bool = True):
             balance_resp = _state.client.get_balance()
             if isinstance(balance_resp, dict) and balance_resp.get('code') == '0' and balance_resp.get('data'):
                 balance = float(balance_resp['data'][0].get('totalEq', 0))
+                _state.client.cached_balance = balance
                 _state.client.sim_balance = balance
                 balance_source = 'okx'
+                # 拿到 OKX 真实余额后立刻存进数据库对应 mode 行
+                try:
+                    db = get_db()
+                    db.set_balance(balance, mode=mode)
+                except Exception:
+                    pass
             else:
                 msg = balance_resp.get('msg', 'unknown') if isinstance(balance_resp, dict) else str(balance_resp)
                 balance_source = f'okx_error:{msg}'
@@ -652,7 +687,7 @@ async def action_reset():
         return {"success": False, "message": "客户端未初始化"}
 
     initial = _state.config.get('TOTAL_CAPITAL', 2000)
-    _state.client.reset_sim_balance(initial)
+    _state.client.reset_cached_balance(initial)
     _state.risk_manager.reset(initial)
     _state.strategy.stats = {
         'total_cycles': 0,
@@ -757,9 +792,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     "stats": tick.get("stats"),
                     "risk": tick.get("risk"),
                 })
-            except (WebSocketDisconnect, RuntimeError) as e:
-                # 连接已关闭，停止推送
-                print(f"WS tick closed: {e}")
+            except WebSocketDisconnect:
+                manager.disconnect(websocket)
+                return
+            except (RuntimeError, ConnectionResetError):
+                # RuntimeError 通常由 starlette 内部状态不正确（已关闭）抛出
                 manager.disconnect(websocket)
                 return
             except Exception as e:
@@ -773,8 +810,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     full = await get_status(refresh_price=False, refresh_balance=True)
                     full["type"] = "full"
                     await websocket.send_json(full)
-                except (WebSocketDisconnect, RuntimeError) as e:
-                    print(f"WS full closed: {e}")
+                except WebSocketDisconnect:
+                    manager.disconnect(websocket)
+                    return
+                except (RuntimeError, ConnectionResetError):
                     manager.disconnect(websocket)
                     return
                 except Exception as e:

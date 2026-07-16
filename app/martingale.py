@@ -166,7 +166,7 @@ class MartingaleStrategy:
 
         # 检查风控
         can_open, reason = self.risk_manager.can_open_position(
-            self.last_price, self.base_price)
+            self.last_price, self.base_price, direction=self.config.direction)
 
         if not can_open:
             self.logger.info(f"风控限制: {reason}")
@@ -428,16 +428,19 @@ class MartingaleStrategy:
         )
 
         if order_id:
-            # 计算盈亏
+            # 计算盈亏（USDT = 价格差 × 张数 × 合约乘数 ctVal）
+            spec = self.client.get_instrument_spec(self.config.symbol)
+            ct_val = spec.get('ctVal', 1.0)
+
             if self.position.side == PositionSide.LONG:
-                profit = (self.last_price - self.position.avg_price) * self.position.total_size
+                profit = (self.last_price - self.position.avg_price) * self.position.total_size * ct_val
             elif self.position.side == PositionSide.SHORT:
-                profit = (self.position.avg_price - self.last_price) * self.position.total_size
+                profit = (self.position.avg_price - self.last_price) * self.position.total_size * ct_val
             else:
                 profit = 0
 
-            # 扣除双边手续费 (开仓 + 平仓, 各约0.05%)
-            fee = self.position.total_size * self.last_price * 0.0005 * 2
+            # 扣除双边手续费 (开仓 + 平仓, 各约0.05%)；同样需乘 ctVal 把张数换算成 BTC 名义价值
+            fee = self.position.total_size * ct_val * self.last_price * 0.0005 * 2
             net_profit = profit - fee
 
             self.recorder.record_trade(
@@ -617,15 +620,22 @@ class MartingaleStrategy:
 
         return "\n".join(lines)
 
-    def run_one_cycle(self) -> bool:
+    def run_one_cycle(self, external_price: Optional[float] = None) -> bool:
         """
         执行一个完整的交易周期
+
+        Args:
+            external_price: 可选，外部注入的价格（如回测中模拟市场）。
+                            为 None 时按正常流程从 client.get_current_price 取价。
 
         Returns:
             周期是否成功完成
         """
         # 更新价格
-        self.last_price = self.client.get_current_price(self.config.symbol)
+        if external_price is not None:
+            self.last_price = external_price
+        else:
+            self.last_price = self.client.get_current_price(self.config.symbol)
 
         # 空闲状态：尝试开仓
         if self.cycle_state == CycleState.IDLE:
@@ -802,13 +812,11 @@ def run_backtest(config: MartingaleConfig = None,
             else:
                 market.set_trend(random.uniform(-0.0002, 0.0002))
 
-        # 更新价格
+        # 更新价格（通过 external_price 注入，避免被 client.get_current_price 覆盖）
         new_price = market.tick()
-        client._sim_last_price = new_price  # 注入模拟价格
 
-        # 运行策略
-        strategy.last_price = new_price
-        strategy.run_one_cycle()
+        # 运行策略（注入回测价格）
+        strategy.run_one_cycle(external_price=new_price)
 
         # 记录权益
         balance = client.get_sim_balance()

@@ -49,8 +49,11 @@ class OKXClient:
         # 实例日志器（便于在 app 层用 self.client.logger.xxx 调试）
         self.logger = logging.getLogger("OKXClient")
 
-        # 模拟账户余额
-        self.sim_balance = 2000.0
+        # 当前已知余额（OKX 实时返回的、或本地缓存的"最后已知值"）。
+        # 命名变更：sim_balance → cached_balance，含义更普适 —— 模拟盘/实盘都用同一字段。
+        # 老字段保留别名避免老调用方立即报错。
+        self.cached_balance: float = 2000.0
+        self.sim_balance = self.cached_balance  # 兼容旧字段
 
         self.session = requests.Session()
         self.session.headers.update({
@@ -471,10 +474,12 @@ class OKXClient:
             margin = cost / lev
             if reduce_only:
                 # 平仓：释放冻结的保证金（盈亏由调用方在 strategy 层结算）
-                self.sim_balance += margin
+                self.cached_balance += margin
+                self.sim_balance = self.cached_balance
             else:
                 # 开仓/加仓：冻结保证金（无论 buy/sell，统一按持仓方向处理）
-                self.sim_balance -= margin
+                self.cached_balance -= margin
+                self.sim_balance = self.cached_balance
             return order_id
 
         resolved_pos_side = self._resolve_pos_side(
@@ -648,27 +653,48 @@ class OKXClient:
                 return (last - low) / low
         return 0.0
 
-    # ==================== 模拟交易相关 ====================
+    # ==================== 余额管理（按 mode 持久化） ====================
 
     def update_sim_balance(self, amount: float):
-        """更新模拟账户余额"""
-        self.sim_balance += amount
+        """更新模拟账户余额（兼容老方法名，推荐 update_cached_balance）"""
+        self.cached_balance += amount
+        self.sim_balance = self.cached_balance
+
+    def update_cached_balance(self, amount: float):
+        """更新当前已知余额（实盘代表"最近一次 OKX 拉到的余额 + 本地累计盈亏"）"""
+        self.cached_balance += amount
+        self.sim_balance = self.cached_balance
 
     def get_sim_balance(self) -> float:
-        """获取模拟账户余额"""
-        return self.sim_balance
+        """获取当前已知余额（兼容老方法名）"""
+        return self.cached_balance
+
+    def get_cached_balance(self) -> float:
+        """获取当前已知余额"""
+        return self.cached_balance
 
     def reset_sim_balance(self, amount: float = 2000.0):
-        """重置模拟账户余额"""
+        """重置当前已知余额（兼容老方法名）"""
+        self.cached_balance = amount
         self.sim_balance = amount
 
-    def load_balance_from_db(self, db) -> float:
-        """从数据库加载余额"""
-        saved_balance = db.get_balance()
-        if saved_balance is not None:
-            self.sim_balance = saved_balance
-        return self.sim_balance
+    def reset_cached_balance(self, amount: float = 2000.0):
+        """重置当前已知余额"""
+        self.cached_balance = amount
+        self.sim_balance = amount
 
-    def save_balance_to_db(self, db):
-        """保存余额到数据库"""
-        db.set_balance(self.sim_balance)
+    def load_balance_from_db(self, db, mode: str = 'simulation') -> float:
+        """从数据库加载指定模式的余额"""
+        mode = 'simulation' if self.simulation else 'live' if mode == 'simulation' else mode
+        # 实盘依旧允许存"最后已知余额"缓存到 live 行，模拟盘读写 simulation 行
+        effective_mode = 'simulation' if self.simulation else 'live'
+        saved = db.get_balance(mode=effective_mode)
+        if saved is not None:
+            self.cached_balance = saved
+            self.sim_balance = saved
+        return self.cached_balance
+
+    def save_balance_to_db(self, db, mode: str = None):
+        """把当前余额持久化到数据库对应 mode 行"""
+        effective_mode = mode or ('simulation' if self.simulation else 'live')
+        db.set_balance(self.cached_balance, mode=effective_mode)
