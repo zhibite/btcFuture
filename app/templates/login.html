@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - BTC马丁策略</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#3b82f6',
+                        danger: '#ef4444'
+                    }
+                }
+            }
+        };
+    </script>
+    <style>
+        body {
+            background:
+                radial-gradient(circle at 20% 10%, rgba(59, 130, 246, 0.15), transparent 50%),
+                radial-gradient(circle at 80% 90%, rgba(239, 68, 68, 0.10), transparent 55%),
+                #0b1220;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center text-gray-100 px-4">
+    <div class="w-full max-w-sm bg-gray-800/80 border border-gray-700 rounded-xl shadow-2xl p-8 backdrop-blur">
+        <div class="text-center mb-6">
+            <div class="inline-flex items-center justify-center w-14 h-14 rounded-full bg-primary/20 mb-3">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-7 w-7 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+                </svg>
+            </div>
+            <h1 class="text-xl font-bold">BTC 马丁策略</h1>
+            <p class="text-sm text-gray-400 mt-1">请登录后访问配置与控制台</p>
+        </div>
+
+        {% if error %}
+        <div class="mb-4 px-3 py-2 rounded bg-danger/20 border border-danger text-sm text-red-300">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <form method="post" action="/login" class="space-y-4">
+            <input type="hidden" name="next" value="{{ next }}">
+
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">用户名</label>
+                <input type="text" name="username" required autocomplete="username"
+                       class="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm focus:border-primary focus:outline-none">
+            </div>
+
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">密码</label>
+                <input type="password" name="password" required autocomplete="current-password"
+                       class="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm focus:border-primary focus:outline-none">
+            </div>
+
+            <button type="submit"
+                    class="w-full bg-primary hover:bg-blue-600 text-white py-2 rounded font-medium transition">
+                登录
+            </button>
+        </form>
+
+        <p class="text-center text-xs text-gray-500 mt-6">
+            仅授权账户可访问交易控制接口
+        </p>
+    </div>
+</body>
+</html>

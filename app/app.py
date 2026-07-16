@@ -12,10 +12,12 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 from pathlib import Path
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, Form
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, Form, Depends
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
+import secrets
 import uvicorn
 
 # 导入交易模块
@@ -41,12 +43,63 @@ class TradeState:
 _state = TradeState()
 
 
+# ============ 鉴权（写死凭据） ============
+# 用户名固定 zengsw，密码默认 anywnbtc076034，可通过环境变量 BTC_FUTURE_PASSWORD 覆盖
+# 仅保护"会改变交易/系统行为"的页面与接口：/config、模式切换、所有 /api/action/* 与 /api/simulate
+# 只读接口（/、/trades、/api/status、/api/trades、/api/mode、/api/config、/ws/status）不强制登录
+AUTH_USERNAME = "zengsw"
+AUTH_PASSWORD = os.environ.get("BTC_FUTURE_PASSWORD", "anywnbtc076034")
+
+# 会话密钥：每次启动重新生成（保持简单；如需多 worker 部署再加持久化）
+SESSION_SECRET = secrets.token_urlsafe(32)
+
+
+def is_authenticated(request: Request) -> bool:
+    return bool(request.session.get("user"))
+
+
+def require_login(request: Request):
+    """依赖：未登录则 302 到 /login。用于受保护路由。"""
+    if not is_authenticated(request):
+        # 保留 next 参数，登录后跳转回
+        next_url = request.url.path
+        if request.url.query:
+            next_url = f"{next_url}?{request.url.query}"
+        raise HTTPFoundRedirect(f"/login?next={next_url}")
+    return request
+
+
+class HTTPFoundRedirect(Exception):
+    """依赖层用 raise 中转到登录页（302）"""
+    def __init__(self, location: str):
+        self.location = location
+
+
 # ============ FastAPI 应用 ============
 app = FastAPI(
     title="BTC马丁策略交易系统",
     description="OKX期货马丁格尔策略Web控制台",
     version="1.0.0"
 )
+
+# Session 中间件（cookie 存已登录标记）
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET,
+    session_cookie="btc_future_session",
+    max_age=60 * 60 * 24 * 7,  # 7 天
+    same_site="lax",
+)
+
+
+# ============ Exception handler：把依赖层 raise 的重定向翻成 302 ============
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi import HTTPException
+
+
+@app.exception_handler(HTTPFoundRedirect)
+async def _redirect_handler(request: Request, exc: HTTPFoundRedirect):
+    return RedirectResponse(url=exc.location, status_code=302)
 
 # 静态文件和模板
 BASE_DIR = Path(__file__).parent
@@ -348,16 +401,20 @@ async def shutdown_event():
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     """首页 - 交易状态"""
-    return render_template("index.html", request, title="交易状态")
+    return render_template("index.html", request,
+                           title="交易状态",
+                           authed=is_authenticated(request))
 
 
 @app.get("/trades", response_class=HTMLResponse)
 async def trades_page(request: Request):
     """交易记录页面"""
-    return render_template("trades.html", request, title="交易记录")
+    return render_template("trades.html", request,
+                           title="交易记录",
+                           authed=is_authenticated(request))
 
 
-@app.get("/config", response_class=HTMLResponse)
+@app.get("/config", response_class=HTMLResponse, dependencies=[Depends(require_login)])
 async def config_page(request: Request):
     """配置页面"""
     return render_template("config.html", request, title="策略配置")
@@ -549,7 +606,7 @@ async def get_config():
     }
 
 
-@app.post("/api/config")
+@app.post("/api/config", dependencies=[Depends(require_login)])
 async def update_config(request: Request):
     """更新配置（保存到当前激活模式）"""
     body = await request.json()
@@ -586,7 +643,7 @@ async def update_config(request: Request):
     return {"success": True, "message": f"[{mode}] 配置已更新", "mode": mode}
 
 
-@app.post("/api/mode/switch")
+@app.post("/api/mode/switch", dependencies=[Depends(require_login)])
 async def switch_mode(request: Request):
     """切换 模拟盘 / 实盘"""
     body = await request.json()
@@ -614,7 +671,7 @@ async def get_mode():
     return {"success": True, "mode": mode}
 
 
-@app.post("/api/action/open")
+@app.post("/api/action/open", dependencies=[Depends(require_login)])
 async def action_open():
     """开仓"""
     if not _state.strategy:
@@ -638,7 +695,7 @@ async def action_open():
     }
 
 
-@app.post("/api/action/close")
+@app.post("/api/action/close", dependencies=[Depends(require_login)])
 async def action_close():
     """平仓"""
     if not _state.strategy:
@@ -659,7 +716,7 @@ async def action_close():
     }
 
 
-@app.post("/api/action/add")
+@app.post("/api/action/add", dependencies=[Depends(require_login)])
 async def action_add():
     """加仓"""
     if not _state.strategy:
@@ -680,7 +737,7 @@ async def action_add():
     }
 
 
-@app.post("/api/action/reset")
+@app.post("/api/action/reset", dependencies=[Depends(require_login)])
 async def action_reset():
     """重置余额"""
     if not _state.client:
@@ -709,7 +766,7 @@ async def action_reset():
     return {"success": True, "message": f"余额已重置为 {initial} USDT"}
 
 
-@app.post("/api/simulate")
+@app.post("/api/simulate", dependencies=[Depends(require_login)])
 async def simulate_price(action: str = Form(...)):
     """模拟价格变动"""
     if not _state.market:
@@ -743,6 +800,46 @@ async def simulate_price(action: str = Form(...)):
         "success": True,
         "price": new_price
     }
+
+
+# ============ 登录 / 登出 ============
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request, next: str = "/"):
+    """登录页：未登录访问受保护路由会自动跳到这里"""
+    # 已登录直接跳转
+    if is_authenticated(request):
+        return RedirectResponse(url=next or "/", status_code=302)
+    return render_template("login.html", request,
+                           error=request.query_params.get("error"),
+                           next=next or "/")
+
+
+@app.post("/login")
+async def login_submit(request: Request, username: str = Form(...),
+                       password: str = Form(...), next: str = Form(default="/")):
+    """校验写死的凭据，校验通过种 session"""
+    if username == AUTH_USERNAME and password == AUTH_PASSWORD:
+        request.session["user"] = AUTH_USERNAME
+        # 阻止 open redirect：只允许同源相对路径
+        target = next if next.startswith("/") and not next.startswith("//") else "/"
+        return RedirectResponse(url=target, status_code=302)
+    return render_template("login.html", request,
+                           error="用户名或密码错误",
+                           next=next or "/")
+
+
+@app.post("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=302)
+
+
+# 便捷 GET 版登出（点链接也能退出）
+@app.get("/logout")
+async def logout_get(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=302)
 
 
 # ============ WebSocket 实时更新 ============

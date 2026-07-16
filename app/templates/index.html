@@ -369,23 +369,39 @@
         }
     }
 
+    // fetch wrapper: 检测被 302 到 /login（未登录访问受保护接口）
+    async function apiFetch(url, opts) {
+        const res = await fetch(url, { ...opts, redirect: 'follow' });
+        // /api/* 端点 302 到 /login 时，response.url 会反映重定向后的 URL
+        if (res.url && res.url.includes('/login')) {
+            alert('会话已失效或需要登录，请先登录后再操作。');
+            // 把浏览器也跳过去
+            location.href = '/login?next=' + encodeURIComponent(url);
+            return null;
+        }
+        return res;
+    }
+
     // 操作按钮
     document.getElementById('btnOpen').addEventListener('click', async () => {
-        const res = await fetch('/api/action/open', { method: 'POST' });
+        const res = await apiFetch('/api/action/open', { method: 'POST' });
+        if (!res) return;
         const data = await res.json();
         alert(data.message);
         fetchStatus();
     });
 
     document.getElementById('btnAdd').addEventListener('click', async () => {
-        const res = await fetch('/api/action/add', { method: 'POST' });
+        const res = await apiFetch('/api/action/add', { method: 'POST' });
+        if (!res) return;
         const data = await res.json();
         alert(data.message);
         fetchStatus();
     });
 
     document.getElementById('btnClose').addEventListener('click', async () => {
-        const res = await fetch('/api/action/close', { method: 'POST' });
+        const res = await apiFetch('/api/action/close', { method: 'POST' });
+        if (!res) return;
         const data = await res.json();
         alert(data.message);
         fetchStatus();
@@ -393,7 +409,8 @@
 
     document.getElementById('btnReset').addEventListener('click', async () => {
         if (confirm('确定要重置余额吗？')) {
-            const res = await fetch('/api/action/reset', { method: 'POST' });
+            const res = await apiFetch('/api/action/reset', { method: 'POST' });
+            if (!res) return;
             const data = await res.json();
             alert(data.message);
             fetchStatus();
@@ -404,11 +421,12 @@
     document.querySelectorAll('.sim-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
             const action = btn.dataset.action;
-            const res = await fetch('/api/simulate', {
+            const res = await apiFetch('/api/simulate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: 'action=' + action
             });
+            if (!res) return;
             const data = await res.json();
             if (data.success) {
                 fetchStatus();
