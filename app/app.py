@@ -26,6 +26,45 @@ from risk_manager import RiskManager, RiskConfig
 from martingale import MartingaleStrategy, MartingaleConfig, SimulatedMarket
 from database import Database, get_db
 
+import logging
+
+
+# ============ 日志（输出到 stderr，docker logs -f 可直接看到） ============
+def _setup_logging() -> logging.Logger:
+    """给 root logger 装一个 StreamHandler，让 martingale/okx_client 里的 logger.info 真正落地。
+
+    日志级别跟随 config.yaml 中的 LOG_LEVEL（默认 INFO）。不写文件，避免日志被
+    容器临时目录吞掉；部署到 docker logs -f 时直接可见。
+    """
+    level_name = str(_state_log_level()).upper()
+    level = getattr(logging, level_name, logging.INFO)
+
+    fmt = '%(asctime)s [%(levelname)s] %(name)s %(message)s'
+    handler = logging.StreamHandler(stream=sys.stderr)
+    handler.setFormatter(logging.Formatter(fmt, datefmt='%Y-%m-%d %H:%M:%S'))
+
+    root = logging.getLogger()
+    root.setLevel(level)
+    # 幂等：避免 reload/重复 startup 时挂多个 handler
+    root.handlers.clear()
+    root.addHandler(handler)
+    # 第三方噪音降级
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("websockets").setLevel(logging.WARNING)
+    return logging.getLogger("app")
+
+
+def _state_log_level() -> str:
+    """从 _state.config 里读 LOG_LEVEL，启动前调用则回落到 'INFO'。"""
+    try:
+        cfg = getattr(_state, "config", None) or {}
+        return cfg.get("LOG_LEVEL", "INFO") if isinstance(cfg, dict) else "INFO"
+    except Exception:
+        return "INFO"
+
+
+_app_logger = None
+
 
 # ============ 全局状态 ============
 class TradeState:
@@ -56,6 +95,29 @@ SESSION_SECRET = secrets.token_urlsafe(32)
 
 def is_authenticated(request: Request) -> bool:
     return bool(request.session.get("user"))
+
+
+def _resolve_current_price(symbol: str) -> tuple[float, str]:
+    """按当前 mode 解析当下应该使用的价格 + 数据源。
+
+    - live 模式：去 OKX /api/v5/market/ticker 拉真实 ticker；拿不到再退到本地 SimulatedMarket
+    - simulation 模式：直接用本地 SimulatedMarket（被 /api/simulate 推动）
+    - 都拿不到：返回 (0.0, 'unavailable')
+
+    返回 (price, source)：source ∈ {'okx','simulated','unavailable'}。
+    """
+    mode = get_active_mode()
+    if mode == 'live' and _state.client:
+        try:
+            px = _state.client.get_current_price(symbol)
+            if px and px > 0:
+                return px, 'okx'
+        except Exception as e:
+            if _app_logger:
+                _app_logger.warning(f"[PRICE] live 模式拉 OKX 价格失败：{e}，回落到 simulated")
+    if _state.market:
+        return _state.market.get_price(), 'simulated'
+    return 0.0, 'unavailable'
 
 
 def require_login(request: Request):
@@ -389,12 +451,21 @@ def save_state():
 @app.on_event("startup")
 async def startup_event():
     """应用启动"""
+    global _app_logger
+    # 必须在 initialize_trading 之前：策略里的 logger.info 才会被收集
+    _app_logger = _setup_logging()
+    _app_logger.info("=" * 60)
+    _app_logger.info("[START] BTC 马丁策略 Web 服务启动")
+    _app_logger.info("=" * 60)
     initialize_trading()
+    _app_logger.info("[READY] 初始化完成，等待登录与指令")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """应用关闭时保存状态"""
+    if _app_logger:
+        _app_logger.info("[STOP] 服务关闭，保存状态")
     save_state()
 
 
@@ -640,6 +711,15 @@ async def update_config(request: Request):
 
     initialize_trading()
 
+    if _app_logger:
+        _app_logger.info(
+            f"[CONFIG] [{mode}] 更新配置: 杠杆={cfg['LEVERAGE']}x "
+            f"首单={cfg['FIRST_ORDER_SIZE']}U 方向={cfg['DIRECTION']} "
+            f"加仓x{cfg['MULTIPLIER']} 间隔={cfg['PRICE_INTERVAL']*100:.1f}% "
+            f"最大加仓={cfg['MAX_DCA_COUNT']} 止盈={cfg['TAKE_PROFIT']*100:.1f}% "
+            f"止损={cfg['MAX_LOSS_RATE']*100:.0f}% AUTO_LOOP={cfg['AUTO_LOOP']}"
+        )
+
     return {"success": True, "message": f"[{mode}] 配置已更新", "mode": mode}
 
 
@@ -651,6 +731,7 @@ async def switch_mode(request: Request):
     if mode not in ('simulation', 'live'):
         return {"success": False, "message": "mode 必须是 simulation 或 live"}
 
+    prev = get_active_mode()
     db = get_db()
     db.set_active_mode(mode)
 
@@ -660,6 +741,9 @@ async def switch_mode(request: Request):
 
     # 重新初始化策略/客户端
     initialize_trading()
+
+    if _app_logger:
+        _app_logger.info(f"[MODE] 切换交易模式: {prev} -> {mode}")
 
     return {"success": True, "message": f"已切换到{mode}", "mode": mode, "config": cfg}
 
@@ -678,9 +762,20 @@ async def action_open():
         return {"success": False, "message": "策略未初始化"}
 
     if not _state.strategy.position.is_empty():
+        if _app_logger:
+            _app_logger.warning("[OPEN] 拒绝：已有持仓")
         return {"success": False, "message": "已有持仓"}
 
-    _state.strategy.last_price = _state.market.get_price()
+    symbol = _state.strategy.config.symbol
+    price, source = _resolve_current_price(symbol)
+    if price <= 0:
+        return {"success": False, "message": "当前不可用价格（OKX + 模拟盘都拉不到）"}
+    _state.strategy.last_price = price
+    if _app_logger:
+        _app_logger.info(
+            f"[OPEN-REQ] 收到开仓请求: 方向={_state.strategy.config.direction} "
+            f"首单={_state.strategy.config.first_order_size}U 价格={price:.2f} (source={source})"
+        )
     success = _state.strategy.check_and_open()
 
     # 保存状态
@@ -689,6 +784,9 @@ async def action_open():
     msg = "开仓成功" if success else "开仓失败"
     if not success and getattr(_state.strategy, 'last_error', None):
         msg = _state.strategy.last_error
+    if _app_logger:
+        level_fn = _app_logger.info if success else _app_logger.warning
+        level_fn(f"[OPEN-RES] {msg} @ {price:.2f}")
     return {
         "success": success,
         "message": msg
@@ -702,14 +800,33 @@ async def action_close():
         return {"success": False, "message": "策略未初始化"}
 
     if _state.strategy.position.is_empty():
+        if _app_logger:
+            _app_logger.warning("[CLOSE] 拒绝：无持仓")
         return {"success": False, "message": "无持仓"}
 
-    _state.strategy.last_price = _state.market.get_price()
+    symbol = _state.strategy.config.symbol
+    price, source = _resolve_current_price(symbol)
+    if price <= 0:
+        return {"success": False, "message": "当前不可用价格（OKX + 模拟盘都拉不到）"}
+    pos_before = _state.strategy.position
+    size_before = pos_before.total_size
+    dca_before = pos_before.dca_count
+    avg_before = pos_before.avg_price
+    _state.strategy.last_price = price
+
+    if _app_logger:
+        _app_logger.info(
+            f"[CLOSE-REQ] 手动平仓请求: 方向={pos_before.side.value} "
+            f"张数={size_before} 均价={avg_before:.2f} 加仓={dca_before} 价格={price:.2f} (source={source})"
+        )
     success = _state.strategy._close_position()
 
     # 保存状态
     save_state()
 
+    if _app_logger:
+        level_fn = _app_logger.info if success else _app_logger.warning
+        level_fn(f"[CLOSE-RES] {'成功' if success else '失败'} @ {price:.2f}")
     return {
         "success": success,
         "message": "平仓成功" if success else "平仓失败"
@@ -723,17 +840,141 @@ async def action_add():
         return {"success": False, "message": "策略未初始化"}
 
     if _state.strategy.position.is_empty():
+        if _app_logger:
+            _app_logger.warning("[ADD] 拒绝：无持仓")
         return {"success": False, "message": "无持仓"}
 
-    _state.strategy.last_price = _state.market.get_price()
+    symbol = _state.strategy.config.symbol
+    price, source = _resolve_current_price(symbol)
+    if price <= 0:
+        return {"success": False, "message": "当前不可用价格（OKX + 模拟盘都拉不到）"}
+    pos_before = _state.strategy.position
+    next_dca_price = getattr(_state.strategy, 'next_dca_price', 0) or 0
+    _state.strategy.last_price = price
+
+    if _app_logger:
+        max_dca = _state.strategy.config.max_dca_count
+        _app_logger.info(
+            f"[ADD-REQ] 手动加仓请求: 当前加仓={pos_before.dca_count}/{max_dca} "
+            f"均价={pos_before.avg_price:.2f} 触发价={next_dca_price:.2f} 价格={price:.2f} (source={source})"
+        )
     success = _state.strategy.check_and_add_position()
 
     # 保存状态
     save_state()
 
+    if _app_logger:
+        if success:
+            pos_after = _state.strategy.position
+            _app_logger.info(
+                f"[ADD-RES] 成功 #{pos_after.dca_count} 张数={pos_after.total_size:.4f} "
+                f"均价={pos_after.avg_price:.2f} @ {price:.2f}"
+            )
+        else:
+            _app_logger.info(f"[ADD-RES] 加仓条件未满足 @ {price:.2f}")
     return {
         "success": success,
         "message": "加仓成功" if success else "加仓条件未满足"
+    }
+
+
+@app.post("/api/position/sync", dependencies=[Depends(require_login)])
+async def action_sync_position():
+    """用 OKX 真实持仓覆盖本地策略的持仓状态。
+
+    用于以下场景：手动在 OKX 下单 / 策略用本地 SimulatedMarket 价格开仓后
+    与 OKX 真实成交价不一致。同步后风控、止盈、止损都按真实均价重新计算。
+    """
+    if not _state.strategy or not _state.client:
+        return {"success": False, "message": "策略或客户端未初始化"}
+
+    mode = get_active_mode()
+    if mode != 'live':
+        return {"success": False, "message": "仅 live 模式需要从 OKX 同步；simulation 模式请直接重置"}
+
+    symbol = _state.strategy.config.symbol
+    try:
+        positions = _state.client.get_positions(symbol)
+    except Exception as e:
+        if _app_logger:
+            _app_logger.error(f"[SYNC] 拉 OKX 持仓失败：{e}")
+        return {"success": False, "message": f"拉 OKX 持仓失败：{e}"}
+
+    pos = _state.strategy.position
+    target = None
+    for p in positions:
+        if float(p.get('pos', '0') or 0) != 0:
+            target = p
+            break
+
+    if not target:
+        # OKX 上没持仓，但本地有：清掉本地持仓
+        avg_before = pos.avg_price
+        first_before = pos.first_entry_price
+        _state.strategy._reset_position()
+        save_state()
+        if _app_logger:
+            _app_logger.warning(
+                f"[SYNC] OKX 上无持仓，但本地有 (均价={avg_before:.2f} 首单={first_before:.2f})，已清空"
+            )
+        return {"success": True, "message": "OKX 无持仓，本地已清空", "okx_empty": True}
+
+    # 把 OKX 持仓对拷到本地
+    okx_pos = float(target.get('pos', '0') or 0)
+    okx_avg = float(target.get('avgPx', '0') or 0)
+    okx_side_raw = target.get('posSide', '').lower()   # 'long'/'short'/'net'
+
+    # 均价异常保护：OKX 在某些成交失败/刚下单瞬间可能回空或负值
+    if okx_pos <= 0 or okx_avg <= 0:
+        if _app_logger:
+            _app_logger.warning(
+                f"[SYNC] OKX 回值异常：pos={okx_pos}, avgPx={okx_avg}，拒绝同步以免污染本地"
+            )
+        return {
+            "success": False,
+            "message": f"OKX 回值异常：pos={okx_pos}, avgPx={okx_avg}（可能刚下单未成交），拒绝同步",
+        }
+
+    # 自适应合约张数：OKX 给的 pos 是张数，已经对齐 lotSz
+    from martingale import PositionSide
+    side = _state.strategy._get_position_side() if hasattr(_state.strategy, '_get_position_side') else pos.side
+    if okx_side_raw == 'short':
+        side = PositionSide.SHORT
+    elif okx_side_raw == 'long':
+        side = PositionSide.LONG
+
+    pos.total_size = abs(okx_pos)
+    pos.avg_price = okx_avg
+    pos.first_entry_price = okx_avg
+    pos.first_entry_time = pos.first_entry_time or time.strftime('%Y-%m-%d %H:%M:%S')
+
+    # dca_count：从 entry_prices 推算；如果列表为空（典型首单）则按 0 处理
+    # 同时用 OKX 创建时间辅助判断：entry_prices 元素数 - 1 表示已加仓的次数
+    entry_prices = getattr(pos, 'entry_prices', None)
+    if entry_prices and len(entry_prices) > 0:
+        pos.dca_count = max(0, len(entry_prices) - 1)
+    else:
+        pos.dca_count = 0
+
+    pos.side = side
+    _state.strategy.base_price = okx_avg
+    _state.strategy.last_dca_price = okx_avg
+
+    save_state()
+    if _app_logger:
+        _app_logger.warning(
+            f"[SYNC] 用 OKX 真实持仓覆盖本地: 方向={side.value} 张数={pos.total_size:.4f} "
+            f"均价={okx_avg:.2f} dca_count={pos.dca_count} (只对齐均价/张数/方向)"
+        )
+    return {
+        "success": True,
+        "message": f"已对齐 OKX 真实持仓：{side.value} 张数={pos.total_size:.4f} 均价={okx_avg:.2f}",
+        "okx_position": {
+            "side": side.value,
+            "size": pos.total_size,
+            "avg_price": okx_avg,
+            "dca_count": pos.dca_count,
+        }
     }
 
 
@@ -744,6 +985,10 @@ async def action_reset():
         return {"success": False, "message": "客户端未初始化"}
 
     initial = _state.config.get('TOTAL_CAPITAL', 2000)
+    if _app_logger:
+        _app_logger.warning(
+            f"[RESET] 重置余额为 {initial} USDT，并清空统计/交易记录（持仓={None if _state.strategy is None else ('空' if _state.strategy.position.is_empty() else '有')}）"
+        )
     _state.client.reset_cached_balance(initial)
     _state.risk_manager.reset(initial)
     _state.strategy.stats = {
@@ -763,14 +1008,29 @@ async def action_reset():
     db.clear_trades()
     db.set_state('current_position', None)
 
+    if _app_logger:
+        _app_logger.info(f"[RESET] 完成，余额={initial} USDT")
     return {"success": True, "message": f"余额已重置为 {initial} USDT"}
 
 
 @app.post("/api/simulate", dependencies=[Depends(require_login)])
 async def simulate_price(action: str = Form(...)):
-    """模拟价格变动"""
+    """模拟价格变动（仅 simulation 模式可用）
+
+    live 模式下调它会让本地 SimulatedMarket 价格漂移，
+    但 OKX 真实行情不会变，会误导决策，所以这里直接 400 拒绝。
+    """
     if not _state.market:
         return {"success": False, "message": "市场未初始化"}
+
+    mode = get_active_mode()
+    if mode == 'live':
+        if _app_logger:
+            _app_logger.warning(f"[SIM] 拒绝：live 模式下调模拟价格动作：{action}")
+        return {
+            "success": False,
+            "message": "实盘模式禁用模拟价格变动（真实价格由 OKX 驱动，不能手动推动）",
+        }
 
     if action == "drop_small":
         _state.market.simulate_drop(0.005)
@@ -789,6 +1049,9 @@ async def simulate_price(action: str = Form(...)):
 
     new_price = _state.market.get_price()
     _state.strategy.last_price = new_price
+
+    if _app_logger:
+        _app_logger.info(f"[SIM] 模拟价格动作: {action} -> 价格={new_price:.2f}")
 
     # 运行策略逻辑
     _state.strategy.run_one_cycle()
@@ -823,7 +1086,12 @@ async def login_submit(request: Request, username: str = Form(...),
         request.session["user"] = AUTH_USERNAME
         # 阻止 open redirect：只允许同源相对路径
         target = next if next.startswith("/") and not next.startswith("//") else "/"
+        if _app_logger:
+            client = request.client.host if request.client else "?"
+            _app_logger.info(f"[AUTH] 登录成功: user={username} from={client} -> {target}")
         return RedirectResponse(url=target, status_code=302)
+    if _app_logger:
+        _app_logger.warning(f"[AUTH] 登录失败: user={username}")
     return render_template("login.html", request,
                            error="用户名或密码错误",
                            next=next or "/")
@@ -831,14 +1099,20 @@ async def login_submit(request: Request, username: str = Form(...),
 
 @app.post("/logout")
 async def logout(request: Request):
+    user = request.session.get("user")
     request.session.clear()
+    if _app_logger:
+        _app_logger.info(f"[AUTH] 登出: user={user}")
     return RedirectResponse(url="/login", status_code=302)
 
 
 # 便捷 GET 版登出（点链接也能退出）
 @app.get("/logout")
 async def logout_get(request: Request):
+    user = request.session.get("user")
     request.session.clear()
+    if _app_logger:
+        _app_logger.info(f"[AUTH] 登出: user={user}")
     return RedirectResponse(url="/login", status_code=302)
 
 

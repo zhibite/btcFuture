@@ -189,6 +189,9 @@ class MartingaleStrategy:
 
     def _calculate_price_change(self, old_price: float, new_price: float) -> float:
         """计算价格变化率"""
+        if old_price <= 0 or new_price <= 0:
+            # 避免零除：返回 0 视为"无变化"，触发不了加仓
+            return 0.0
         if self.config.direction == "long":
             # 做多：价格下跌为负，上涨为正
             return (new_price - old_price) / old_price
@@ -208,8 +211,21 @@ class MartingaleStrategy:
         return price_change >= self.config.price_interval
 
     def _check_take_profit_condition(self) -> float:
-        """检查止盈条件，返回盈亏比例"""
+        """检查止盈条件，返回盈亏比例
+
+        保护：
+        - 仓位为空时返回 0.0
+        - avg_price<=0 时（持仓状态被外部破坏 / 同步异常）返回 0.0，
+          避免下游 ZeroDivisionError。风控/止盈判断把 0% 当作"未达成"处理。
+        - last_price<=0 时同理。
+        """
         if self.position.is_empty():
+            return 0.0
+        if self.position.avg_price <= 0 or self.last_price <= 0:
+            self.logger.warning(
+                f"[GUARD] _check_take_profit_condition 拒绝计算："
+                f"avg_price={self.position.avg_price}, last_price={self.last_price}"
+            )
             return 0.0
 
         if self.config.direction == "long":
@@ -364,7 +380,12 @@ class MartingaleStrategy:
         profit_rate = self._check_take_profit_condition()
 
         if profit_rate >= self.config.take_profit:
-            self.logger.info(f"触发止盈! 收益率: {profit_rate * 100:.2f}%")
+            target_rate = self.config.take_profit * 100
+            self.logger.info(
+                f"[TP] 触发止盈: 收益率={profit_rate * 100:.2f}% "
+                f"(目标 {target_rate:.2f}%) 方向={self.position.side.value} "
+                f"均价={self.position.avg_price:.2f} 当前价={self.last_price:.2f}"
+            )
             return self._close_position(pnl=profit_rate)
 
         return False
@@ -384,14 +405,20 @@ class MartingaleStrategy:
         status = self.risk_manager.check_loss_risk(balance)
 
         if status.emergency_exit:
-            self.logger.warning(f"风控触发止损: {status.message}")
+            self.logger.warning(
+                f"[STOP] 风控触发紧急止损: {status.message} "
+                f"方向={self.position.side.value} 均价={self.position.avg_price:.2f} 当前价={self.last_price:.2f}"
+            )
             return self._close_position(stop_loss=True)
 
         # 检查最大加仓次数后的亏损
         if self.position.dca_count >= self.config.max_dca_count:
             loss_rate = self._check_take_profit_condition()
             if loss_rate <= -0.02:  # 累计亏损超过2%
-                self.logger.warning(f"最大加仓后仍亏损 {abs(loss_rate) * 100:.2f}%，止损")
+                self.logger.warning(
+                    f"[STOP] 最大加仓后仍亏损 {abs(loss_rate) * 100:.2f}%，强制止损 "
+                    f"方向={self.position.side.value} 均价={self.position.avg_price:.2f} 当前价={self.last_price:.2f}"
+                )
                 return self._close_position(stop_loss=True)
 
         return False
@@ -467,6 +494,16 @@ class MartingaleStrategy:
 
             self.logger.info(f"平仓完成! 盈亏: {net_profit:.2f} USDT")
             self.logger.info(f"累计盈利: {self.stats['total_profit']:.2f} | 累计亏损: {self.stats['total_loss']:.2f}")
+
+            # 统一一条单行 INFO，便于 docker logs 抓取
+            tag = "[STOP-CLOSE]" if stop_loss else "[CLOSE-DONE]"
+            self.logger.info(
+                f"{tag} 方向={self.position.side.value if hasattr(self.position.side, 'value') else self.position.side} "
+                f"原因={'止损' if stop_loss else ('止盈' if pnl else '手动/自动')} "
+                f"张数={self.position.total_size:.4f} 均价={self.position.avg_price:.2f} "
+                f"平仓价={self.last_price:.2f} 收益={net_profit:+.2f}U "
+                f"累计盈利={self.stats['total_profit']:.2f} 累计亏损={self.stats['total_loss']:.2f}"
+            )
 
             # 重置仓位
             self._reset_position()
@@ -593,7 +630,7 @@ class MartingaleStrategy:
             f"当前价格: {self.last_price:.2f}",
         ]
 
-        if not self.position.is_empty():
+        if not self.position.is_empty() and self.position.avg_price > 0:
             direction = self.config.direction
             if direction == 'long':
                 price_diff = self.last_price - self.position.avg_price
@@ -606,6 +643,9 @@ class MartingaleStrategy:
             lines.append(f"下次加仓价: {self.get_next_dca_price():.2f}")
             lines.append(f"止盈价格: {self.get_target_profit_price():.2f}")
             lines.append(f"盈亏平衡价: {self.get_breakeven_price():.2f}")
+        elif not self.position.is_empty():
+            # 均价被破坏（0/负），给前端一个明显提示，避免下游再除零
+            lines.append("浮动盈亏: -- (avg_price 异常，请用「同步OKX持仓」或重置)")
 
         lines.extend([
             "-" * 50,

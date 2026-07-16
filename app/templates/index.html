@@ -134,13 +134,17 @@
         <button id="btnReset" class="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded-lg font-medium transition">
             重置余额
         </button>
+        <button id="btnSyncPos" class="px-4 py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded-lg font-medium transition"
+                title="用 OKX 真实持仓覆盖本地价格/张数（live 模式专用）">
+            同步OKX持仓
+        </button>
     </div>
     <p id="directionHint" class="text-sm text-gray-400 mt-3">当前方向: 做多</p>
 </div>
 
 <!-- 模拟价格 -->
-<div class="bg-gray-800 rounded-lg p-6 border border-gray-700 mb-6">
-    <h2 class="text-lg font-semibold mb-4">模拟价格变动</h2>
+<div id="simPanel" class="bg-gray-800 rounded-lg p-6 border border-gray-700 mb-6">
+    <h2 class="text-lg font-semibold mb-4">模拟价格变动 <span class="text-xs text-yellow-400 font-normal">(仅 simulation 模式可见)</span></h2>
     <div class="flex flex-wrap gap-2">
         <button class="sim-btn px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-sm" data-action="drop_small">小跌 0.5%</button>
         <button class="sim-btn px-3 py-1 bg-red-700 hover:bg-red-800 text-white rounded text-sm" data-action="drop_medium">中跌 1%</button>
@@ -262,6 +266,12 @@
                 strip.querySelector('span:last-of-type').textContent = '(使用 OKX Demo 资金，不影响真实资产)';
             }
         }
+
+        // 按 mode 显隐仿真 / 实盘专用面板，避免误操作
+        const simPanel = document.getElementById('simPanel');
+        if (simPanel) simPanel.style.display = (d.mode === 'live') ? 'none' : '';
+        const syncBtn = document.getElementById('btnSyncPos');
+        if (syncBtn) syncBtn.style.display = (d.mode === 'live') ? '' : 'none';
 
         if (!d.direction) return;
 
@@ -415,6 +425,15 @@
             alert(data.message);
             fetchStatus();
         }
+    });
+
+    document.getElementById('btnSyncPos').addEventListener('click', async () => {
+        if (!confirm('用 OKX 真实持仓覆盖本地记录的均价/张数/方向？')) return;
+        const res = await apiFetch('/api/position/sync', { method: 'POST' });
+        if (!res) return;
+        const data = await res.json();
+        alert(data.message);
+        fetchStatus();
     });
 
     // 模拟价格按钮
