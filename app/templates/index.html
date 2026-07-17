@@ -221,7 +221,12 @@
         // 价格
         if (d.price !== undefined && d.price !== null) {
             const px = Number(d.price);
-            document.getElementById('currentPrice').textContent = '$' + px.toFixed(2);
+            const priceSource = d.price_source || d.priceSource || '';
+            // simulated 价格加明显标识，避免误判为 OKX 真实行情
+            const isFake = (priceSource === 'simulated' || priceSource === 'default' || priceSource === 'simulated_fallback');
+            const priceLabel = isFake ? ('$' + px.toFixed(2) + '  (模拟)') : '$' + px.toFixed(2);
+            document.getElementById('currentPrice').textContent = priceLabel;
+            document.getElementById('currentPrice').className = 'text-2xl font-bold ' + (isFake ? 'text-yellow-400' : 'text-white');
             window.__btcPrice = px;
             const navEl = document.getElementById('navPrice');
             if (navEl) navEl.textContent = 'BTC: $' + px.toFixed(2);

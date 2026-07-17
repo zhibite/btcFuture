@@ -377,21 +377,8 @@ class OKXClient:
             symbol: 交易对
 
         Returns:
-            行情数据
+            行情数据（simulation 模式走 OKX Demo Trading 接口，共享实盘撮合引擎）
         """
-        if self.simulation:
-            return {
-                'code': '0',
-                'data': [{
-                    'instId': symbol,
-                    'last': '65000.0',  # 模拟价格
-                    'bidPx': '64999.0',
-                    'askPx': '65001.0',
-                    'high24h': '66000.0',
-                    'low24h': '64000.0'
-                }]
-            }
-
         path = "/api/v5/market/ticker"
         params = {"instId": symbol}
         result = self._request('GET', path, params=params)
@@ -582,16 +569,7 @@ class OKXClient:
         return self._request('GET', path, params=params)
 
     def get_funding_rate(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """获取当前资金费率"""
-        if self.simulation:
-            return {
-                'code': '0',
-                'data': [{
-                    'fundingRate': '0.000100',  # 0.01%
-                    'nextFundingTime': '2026-07-16T00:00:00.000Z'
-                }]
-            }
-
+        """获取当前资金费率（simulation 模式走 OKX Demo Trading 接口，共享实盘撮合引擎）"""
         path = "/api/v5/public/funding-rate"
         params = {"instId": symbol}
         result = self._request('GET', path, params=params)
@@ -611,29 +589,8 @@ class OKXClient:
             limit: 数量
 
         Returns:
-            K线数据列表
+            K线数据列表（simulation 模式走 OKX Demo Trading 接口，共享实盘撮合引擎）
         """
-        if self.simulation:
-            # 生成模拟K线数据
-            import random
-            base_price = 65000
-            candles = []
-            now = int(time.time() * 1000)
-            for i in range(limit, 0, -1):
-                ts = now - i * 3600000
-                open_p = base_price + random.uniform(-500, 500)
-                high_p = open_p + random.uniform(0, 200)
-                low_p = open_p - random.uniform(0, 200)
-                close_p = open_p + random.uniform(-100, 100)
-                candles.append({
-                    'ts': str(ts),
-                    'open': str(open_p),
-                    'high': str(high_p),
-                    'low': str(low_p),
-                    'close': str(close_p)
-                })
-            return candles
-
         path = "/api/v5/market/candles"
         params = {"instId": symbol, "bar": bar, "limit": str(limit)}
         result = self._request('GET', path, params=params)

@@ -78,6 +78,9 @@ class TradeState:
         self.config: Dict[str, Any] = {}
         self.trades: list = []
         self.last_update = time.time()
+        # 后台策略循环（live 模式下驱动 run_one_cycle 用）
+        self.strategy_task: Optional[asyncio.Task] = None
+        self.strategy_task_lock = None  # 延迟初始化（asyncio.Lock 不能在 __init__ 里建）
 
 _state = TradeState()
 
@@ -400,18 +403,59 @@ def initialize_trading():
     _state.strategy.initialize()
 
     # 恢复策略状态
+    # 修复：原来的判断是 `if saved_position and not _state.strategy.position.is_empty()`，
+    # 但启动时 _state.strategy.position 永远是默认空仓（side=NONE, total_size=0），
+    # 导致 saved_position 永远不会被恢复，git pull / 重启后持仓就"凭空消失"。
+    # 现在改成"DB 里如果有 saved_position，就覆盖回写到策略对象里"。
     saved_position = db.get_state('current_position')
-    if saved_position and not _state.strategy.position.is_empty():
-        # 恢复持仓信息
-        _state.strategy.position.side = saved_position.get('side', 'none')
-        _state.strategy.position.total_size = saved_position.get('total_size', 0)
-        _state.strategy.position.avg_price = saved_position.get('avg_price', 0)
-        _state.strategy.position.dca_count = saved_position.get('dca_count', 0)
-        _state.strategy.position.first_entry_price = saved_position.get('first_entry_price', 0)
-        _state.strategy.position.first_entry_time = saved_position.get('first_entry_time', '')
-        # last_dca_price 必须同步恢复，否则 get_next_dca_price() 会算出"从 0 跌 0.8%"的错位
-        _state.strategy.last_dca_price = saved_position.get('last_dca_price', saved_position.get('avg_price', 0))
-        _state.strategy.base_price = saved_position.get('base_price', _state.strategy.last_dca_price)
+    if saved_position:
+        # 防呆：saved_position 可能是手贱被 set_state('current_position', None) 之后又 set_state({}, ...) 之类
+        if not isinstance(saved_position, dict):
+            if _app_logger:
+                _app_logger.warning(f"[RESTORE] current_position 类型异常：{type(saved_position).__name__}，跳过恢复")
+        elif saved_position.get('side') in (None, '', 'none') or saved_position.get('total_size', 0) <= 0:
+            # 没有真实方向或张数，视为"空仓记录"——不恢复，但仍保留 DB 中的值以便审计
+            if _app_logger:
+                _app_logger.info(
+                    f"[RESTORE] DB 中 current_position 是空仓记录 (side={saved_position.get('side')}, "
+                    f"size={saved_position.get('total_size', 0)})，策略按空仓启动"
+                )
+        else:
+            # 恢复持仓信息。注意：DB 里存的是字符串 ('long'/'short'/'none')，
+            # Position.side 字段是 PositionSide enum——必须显式转 enum，否则后续
+            # `pos.side == PositionSide.LONG` 这种比较永远 False，会引发各种诡异 bug。
+            from martingale import PositionSide
+            side_raw = str(saved_position.get('side', 'none')).lower()
+            try:
+                side_enum = PositionSide(side_raw)
+            except ValueError:
+                if _app_logger:
+                    _app_logger.warning(f"[RESTORE] DB 中 side='{side_raw}' 无法解析为 PositionSide，按 LONG 处理")
+                side_enum = PositionSide.LONG
+
+            _state.strategy.position.side = side_enum
+            _state.strategy.position.total_size = float(saved_position.get('total_size', 0))
+            _state.strategy.position.avg_price = float(saved_position.get('avg_price', 0))
+            _state.strategy.position.dca_count = int(saved_position.get('dca_count', 0))
+            _state.strategy.position.first_entry_price = float(saved_position.get('first_entry_price', 0))
+            _state.strategy.position.first_entry_time = saved_position.get('first_entry_time', '')
+            # last_dca_price 必须同步恢复，否则 get_next_dca_price() 会算出"从 0 跌 0.8%"的错位
+            _state.strategy.last_dca_price = float(
+                saved_position.get('last_dca_price', saved_position.get('avg_price', 0))
+            )
+            _state.strategy.position.base_price = float(
+                saved_position.get('base_price', _state.strategy.last_dca_price)
+            )
+            # cycle_state 要切回 POSITION_OPEN，否则 run_one_cycle 会走 IDLE 分支去尝试开新仓
+            from martingale import CycleState
+            _state.strategy.cycle_state = CycleState.POSITION_OPEN
+            if _app_logger:
+                _app_logger.info(
+                    f"[RESTORE] 从 DB 恢复持仓: 方向={side_enum.value} "
+                    f"张数={_state.strategy.position.total_size} 均价={_state.strategy.position.avg_price:.2f} "
+                    f"加仓={_state.strategy.position.dca_count}/{_state.strategy.config.max_dca_count} "
+                    f"last_dca={_state.strategy.last_dca_price:.2f}"
+                )
 
     # 同步 _state.config，给只读路由（/api/status、/api/action/reset）使用
     _state.config = config
@@ -459,11 +503,14 @@ async def startup_event():
     _app_logger.info("=" * 60)
     initialize_trading()
     _app_logger.info("[READY] 初始化完成，等待登录与指令")
+    # 启动后台策略循环（live + simulation 都启用）。这是实盘"价格到了自动加仓"的真正驱动。
+    await _start_strategy_loop()
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """应用关闭时保存状态"""
+    await _stop_strategy_loop()
     if _app_logger:
         _app_logger.info("[STOP] 服务关闭，保存状态")
     save_state()
@@ -711,6 +758,14 @@ async def update_config(request: Request):
 
     initialize_trading()
 
+    # CHECK_INTERVAL 变了，重启后台循环以应用新间隔
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(_start_strategy_loop())
+    except RuntimeError:
+        pass
+
     if _app_logger:
         _app_logger.info(
             f"[CONFIG] [{mode}] 更新配置: 杠杆={cfg['LEVERAGE']}x "
@@ -742,6 +797,15 @@ async def switch_mode(request: Request):
     # 重新初始化策略/客户端
     initialize_trading()
 
+    # 重启后台策略循环：旧 client/strategy 已经被换掉了，跑下去会拿错对象
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(_start_strategy_loop())
+    except RuntimeError:
+        # 没有运行中的 loop（同步场景），不重启循环也无影响
+        pass
+
     if _app_logger:
         _app_logger.info(f"[MODE] 切换交易模式: {prev} -> {mode}")
 
@@ -770,13 +834,19 @@ async def action_open():
     price, source = _resolve_current_price(symbol)
     if price <= 0:
         return {"success": False, "message": "当前不可用价格（OKX + 模拟盘都拉不到）"}
-    _state.strategy.last_price = price
-    if _app_logger:
-        _app_logger.info(
-            f"[OPEN-REQ] 收到开仓请求: 方向={_state.strategy.config.direction} "
-            f"首单={_state.strategy.config.first_order_size}U 价格={price:.2f} (source={source})"
-        )
-    success = _state.strategy.check_and_open()
+
+    # 与后台循环互斥：手动操作期间阻塞 _strategy_loop 跑 run_one_cycle，
+    # 避免同时改 last_price / 同时下 place_order
+    if _state.strategy_task_lock is None:
+        _state.strategy_task_lock = asyncio.Lock()
+    async with _state.strategy_task_lock:
+        _state.strategy.last_price = price
+        if _app_logger:
+            _app_logger.info(
+                f"[OPEN-REQ] 收到开仓请求: 方向={_state.strategy.config.direction} "
+                f"首单={_state.strategy.config.first_order_size}U 价格={price:.2f} (source={source})"
+            )
+        success = _state.strategy.check_and_open()
 
     # 保存状态
     save_state()
@@ -812,14 +882,17 @@ async def action_close():
     size_before = pos_before.total_size
     dca_before = pos_before.dca_count
     avg_before = pos_before.avg_price
-    _state.strategy.last_price = price
 
-    if _app_logger:
-        _app_logger.info(
-            f"[CLOSE-REQ] 手动平仓请求: 方向={pos_before.side.value} "
-            f"张数={size_before} 均价={avg_before:.2f} 加仓={dca_before} 价格={price:.2f} (source={source})"
-        )
-    success = _state.strategy._close_position()
+    if _state.strategy_task_lock is None:
+        _state.strategy_task_lock = asyncio.Lock()
+    async with _state.strategy_task_lock:
+        _state.strategy.last_price = price
+        if _app_logger:
+            _app_logger.info(
+                f"[CLOSE-REQ] 手动平仓请求: 方向={pos_before.side.value} "
+                f"张数={size_before} 均价={avg_before:.2f} 加仓={dca_before} 价格={price:.2f} (source={source})"
+            )
+        success = _state.strategy._close_position()
 
     # 保存状态
     save_state()
@@ -835,7 +908,9 @@ async def action_close():
 
 @app.post("/api/action/add", dependencies=[Depends(require_login)])
 async def action_add():
-    """加仓"""
+    """加仓（手动）。注意：自动加仓由后台 _strategy_loop 驱动，
+    大多数情况下你不需要点这个按钮。
+    """
     if not _state.strategy:
         return {"success": False, "message": "策略未初始化"}
 
@@ -850,15 +925,18 @@ async def action_add():
         return {"success": False, "message": "当前不可用价格（OKX + 模拟盘都拉不到）"}
     pos_before = _state.strategy.position
     next_dca_price = getattr(_state.strategy, 'next_dca_price', 0) or 0
-    _state.strategy.last_price = price
 
-    if _app_logger:
-        max_dca = _state.strategy.config.max_dca_count
-        _app_logger.info(
-            f"[ADD-REQ] 手动加仓请求: 当前加仓={pos_before.dca_count}/{max_dca} "
-            f"均价={pos_before.avg_price:.2f} 触发价={next_dca_price:.2f} 价格={price:.2f} (source={source})"
-        )
-    success = _state.strategy.check_and_add_position()
+    if _state.strategy_task_lock is None:
+        _state.strategy_task_lock = asyncio.Lock()
+    async with _state.strategy_task_lock:
+        _state.strategy.last_price = price
+        if _app_logger:
+            max_dca = _state.strategy.config.max_dca_count
+            _app_logger.info(
+                f"[ADD-REQ] 手动加仓请求: 当前加仓={pos_before.dca_count}/{max_dca} "
+                f"均价={pos_before.avg_price:.2f} 触发价={next_dca_price:.2f} 价格={price:.2f} (source={source})"
+            )
+        success = _state.strategy.check_and_add_position()
 
     # 保存状态
     save_state()
@@ -871,7 +949,21 @@ async def action_add():
                 f"均价={pos_after.avg_price:.2f} @ {price:.2f}"
             )
         else:
-            _app_logger.info(f"[ADD-RES] 加仓条件未满足 @ {price:.2f}")
+            # 把"为什么不满足"也讲清楚，避免用户再来一次问同样的问题
+            last_dca = _state.strategy.last_dca_price
+            if pos_before.dca_count >= _state.strategy.config.max_dca_count:
+                why = f"已达最大加仓次数 {pos_before.dca_count}/{_state.strategy.config.max_dca_count}"
+            elif last_dca > 0:
+                interval_pct = (last_dca - price) / last_dca * 100 if pos_before.side.value == 'long' else (price - last_dca) / last_dca * 100
+                if interval_pct < 0:
+                    why = f"价格朝不利方向变动（{interval_pct:+.2f}%），未触发加仓"
+                else:
+                    why = (f"距上次加仓仅 {interval_pct:.2f}%，未达触发阈值 "
+                           f"{_state.strategy.config.price_interval*100:.2f}% "
+                           f"（last_dca={last_dca:.2f} 当前={price:.2f}）")
+            else:
+                why = "上次加仓价异常（last_dca_price<=0）"
+            _app_logger.info(f"[ADD-RES] 加仓条件未满足：{why} @ {price:.2f}")
     return {
         "success": success,
         "message": "加仓成功" if success else "加仓条件未满足"
@@ -911,7 +1003,10 @@ async def action_sync_position():
         # OKX 上没持仓，但本地有：清掉本地持仓
         avg_before = pos.avg_price
         first_before = pos.first_entry_price
-        _state.strategy._reset_position()
+        if _state.strategy_task_lock is None:
+            _state.strategy_task_lock = asyncio.Lock()
+        async with _state.strategy_task_lock:
+            _state.strategy._reset_position()
         save_state()
         if _app_logger:
             _app_logger.warning(
@@ -935,30 +1030,33 @@ async def action_sync_position():
             "message": f"OKX 回值异常：pos={okx_pos}, avgPx={okx_avg}（可能刚下单未成交），拒绝同步",
         }
 
-    # 自适应合约张数：OKX 给的 pos 是张数，已经对齐 lotSz
-    from martingale import PositionSide
-    side = _state.strategy._get_position_side() if hasattr(_state.strategy, '_get_position_side') else pos.side
-    if okx_side_raw == 'short':
-        side = PositionSide.SHORT
-    elif okx_side_raw == 'long':
-        side = PositionSide.LONG
+    if _state.strategy_task_lock is None:
+        _state.strategy_task_lock = asyncio.Lock()
+    async with _state.strategy_task_lock:
+        # 自适应合约张数：OKX 给的 pos 是张数，已经对齐 lotSz
+        from martingale import PositionSide
+        side = _state.strategy._get_position_side() if hasattr(_state.strategy, '_get_position_side') else pos.side
+        if okx_side_raw == 'short':
+            side = PositionSide.SHORT
+        elif okx_side_raw == 'long':
+            side = PositionSide.LONG
 
-    pos.total_size = abs(okx_pos)
-    pos.avg_price = okx_avg
-    pos.first_entry_price = okx_avg
-    pos.first_entry_time = pos.first_entry_time or time.strftime('%Y-%m-%d %H:%M:%S')
+        pos.total_size = abs(okx_pos)
+        pos.avg_price = okx_avg
+        pos.first_entry_price = okx_avg
+        pos.first_entry_time = pos.first_entry_time or time.strftime('%Y-%m-%d %H:%M:%S')
 
-    # dca_count：从 entry_prices 推算；如果列表为空（典型首单）则按 0 处理
-    # 同时用 OKX 创建时间辅助判断：entry_prices 元素数 - 1 表示已加仓的次数
-    entry_prices = getattr(pos, 'entry_prices', None)
-    if entry_prices and len(entry_prices) > 0:
-        pos.dca_count = max(0, len(entry_prices) - 1)
-    else:
-        pos.dca_count = 0
+        # dca_count：从 entry_prices 推算；如果列表为空（典型首单）则按 0 处理
+        # 同时用 OKX 创建时间辅助判断：entry_prices 元素数 - 1 表示已加仓的次数
+        entry_prices = getattr(pos, 'entry_prices', None)
+        if entry_prices and len(entry_prices) > 0:
+            pos.dca_count = max(0, len(entry_prices) - 1)
+        else:
+            pos.dca_count = 0
 
-    pos.side = side
-    _state.strategy.base_price = okx_avg
-    _state.strategy.last_dca_price = okx_avg
+        pos.side = side
+        _state.strategy.base_price = okx_avg
+        _state.strategy.last_dca_price = okx_avg
 
     save_state()
     if _app_logger:
@@ -1053,8 +1151,12 @@ async def simulate_price(action: str = Form(...)):
     if _app_logger:
         _app_logger.info(f"[SIM] 模拟价格动作: {action} -> 价格={new_price:.2f}")
 
-    # 运行策略逻辑
-    _state.strategy.run_one_cycle()
+    # 与后台策略循环互斥，避免 run_one_cycle 并发改 last_price
+    if _state.strategy_task_lock is None:
+        _state.strategy_task_lock = asyncio.Lock()
+    async with _state.strategy_task_lock:
+        # 运行策略逻辑
+        _state.strategy.run_one_cycle()
 
     # 保存状态
     save_state()
@@ -1197,6 +1299,88 @@ async def websocket_endpoint(websocket: WebSocket):
         # 兜底：避免后台协程崩溃
         print(f"WS endpoint error: {e}")
         manager.disconnect(websocket)
+
+
+# ============ 后台策略循环 ============
+# 之前 Web 版是纯被动模式：只有手动 / 手动点"加仓"按钮才会触发 run_one_cycle。
+# 实盘 (live) 下这意味着 OKX 价格已经跌穿触发价，但策略根本不知道，也不会加仓。
+# 这里加一个 asyncio 后台任务，每 CHECK_INTERVAL 秒拉一次 OKX 真实价格 → 跑一次
+# run_one_cycle（包含开仓 / 加仓 / 止盈 / 止损 全套逻辑）。
+#
+# 模拟盘 (simulation) 也启用，价格来源是本地 SimulatedMarket，行为与 live 一致。
+# 这条路径完全独立于 /api/simulate（那个只更新本地市场价做手动试价）。
+#
+# 关键设计：
+# - 单实例：通过 _state.strategy_task + cancel + await 实现"切换 mode / 更新配置时无缝重启"
+# - 失败自愈：单次循环抛异常只记日志，下次 sleep 后继续跑，不让协程死掉
+# - 互斥：initialize_trading 切换 client/strategy 时拿锁，避免一边重启一边还在跑旧对象
+
+
+async def _strategy_loop():
+    """后台策略循环：每 CHECK_INTERVAL 秒跑一次 run_one_cycle()
+
+    与 main.py 的 while self.running 同源，迁移到 asyncio 适配 FastAPI。
+    """
+    # 循环退出标志：app 关闭时会 cancel 这个 task，外部不需要再翻 _state.running
+    log = logging.getLogger("StrategyLoop")
+    log.info("[LOOP] 后台策略循环启动")
+
+    while True:
+        try:
+            # 检查 _state.strategy 是不是已经被切掉了（initialize_trading 重启）
+            if not _state.strategy or not _state.client:
+                await asyncio.sleep(2)
+                continue
+
+            # 加锁，避免跟 initialize_trading / switch_mode 抢资源
+            if _state.strategy_task_lock is not None:
+                async with _state.strategy_task_lock:
+                    if not _state.strategy or not _state.client:
+                        continue
+                    _state.strategy.run_one_cycle()
+            else:
+                _state.strategy.run_one_cycle()
+
+            interval = _state.config.get('CHECK_INTERVAL', 2) or 2
+            await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            log.info("[LOOP] 后台策略循环收到取消信号，退出")
+            raise
+        except Exception as e:
+            # 单次失败不能让循环死掉；用 logging 防止 _app_logger 未初始化时报 NameError
+            log.exception(f"[LOOP] 单次循环异常（将继续下一轮）: {e}")
+            await asyncio.sleep(2)
+
+
+async def _start_strategy_loop():
+    """启动后台策略循环。重复调用会先停旧的再起新的，天然支持热重启。"""
+    if _state.strategy_task_lock is None:
+        _state.strategy_task_lock = asyncio.Lock()
+
+    if _state.strategy_task and not _state.strategy_task.done():
+        _state.strategy_task.cancel()
+        try:
+            await _state.strategy_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    _state.strategy_task = asyncio.create_task(_strategy_loop())
+    if _app_logger:
+        interval = _state.config.get('CHECK_INTERVAL', 2) or 2
+        _app_logger.info(f"[LOOP] 后台策略循环已启动，interval={interval}s")
+
+
+async def _stop_strategy_loop():
+    """停止后台策略循环（app shutdown 时调用）"""
+    if _state.strategy_task and not _state.strategy_task.done():
+        _state.strategy_task.cancel()
+        try:
+            await _state.strategy_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        _state.strategy_task = None
+    if _app_logger:
+        _app_logger.info("[LOOP] 后台策略循环已停止")
 
 
 # ============ 启动入口 ============

@@ -188,19 +188,31 @@ class MartingaleStrategy:
         return PositionSide.LONG if self.config.direction == "long" else PositionSide.SHORT
 
     def _calculate_price_change(self, old_price: float, new_price: float) -> float:
-        """计算价格变化率"""
+        """计算价格变化率（按方向"有利变动"为正）
+
+        加仓语义：
+        - 做多：下跌是有利的（利于低位加仓），返回下跌幅度的绝对值
+        - 做空：上涨是有利的，返回上涨幅度的绝对值
+
+        约定：返回值 ≥ 0 表示"价格朝有利于加仓的方向变动"，调用方可以直接
+        `return change >= self.config.price_interval` 判断。这样无论方向都对。
+        """
         if old_price <= 0 or new_price <= 0:
             # 避免零除：返回 0 视为"无变化"，触发不了加仓
             return 0.0
         if self.config.direction == "long":
-            # 做多：价格下跌为负，上涨为正
-            return (new_price - old_price) / old_price
+            # 做多：价格下跌时返回跌幅绝对值，上涨时返回 0（不触发加仓）
+            return max(0.0, (old_price - new_price) / old_price)
         else:
-            # 做空：价格上涨为负，下跌为正
-            return (old_price - new_price) / old_price
+            # 做空：价格上涨时返回涨幅绝对值，下跌时返回 0
+            return max(0.0, (new_price - old_price) / old_price)
 
     def _check_dca_condition(self) -> bool:
-        """检查加仓条件（根据方向）"""
+        """检查加仓条件（根据方向）
+
+        _calculate_price_change 已经按方向把"有利变动"翻成非负数，
+        所以这里直接 `>= price_interval` 即可，long/short 通用。
+        """
         if self.position.is_empty():
             return False
 
