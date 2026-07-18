@@ -112,6 +112,9 @@ class MartingaleStrategy:
         self.base_price = 0.0  # 周期开始时的基准价格
         self.pending_orders: List[str] = []
 
+        # 自动循环等待标记（止盈平仓后标记，由 _strategy_loop 异步处理延迟）
+        self._pending_auto_loop_wait = False
+
         # 统计数据
         self.stats = {
             'total_cycles': 0,
@@ -520,10 +523,10 @@ class MartingaleStrategy:
             # 重置仓位
             self._reset_position()
 
-            # 如果开启自动循环，延迟后重新开仓
+            # 如果开启自动循环，平仓后标记需要等待（由调用方 run_one_cycle / _strategy_loop 处理异步延迟）
             if self.config.auto_loop and not stop_loss:
-                self.logger.info("自动循环模式，5秒后重新开仓...")
-                time.sleep(5)
+                self.logger.info("自动循环模式，下次循环将等待5秒后重新开仓...")
+                self._pending_auto_loop_wait = True
 
             return True
 

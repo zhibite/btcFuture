@@ -1370,6 +1370,11 @@ async def _strategy_loop():
                 await asyncio.sleep(2)
                 continue
 
+            # 处理止盈后的自动循环等待（_close_position 标记，由本循环异步等待，避免阻塞）
+            if _state.strategy._pending_auto_loop_wait:
+                _state.strategy._pending_auto_loop_wait = False
+                await asyncio.sleep(5)
+
             # 加锁，避免跟 initialize_trading / switch_mode 抢资源
             if _state.strategy_task_lock is not None:
                 async with _state.strategy_task_lock:
