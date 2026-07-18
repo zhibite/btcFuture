@@ -635,7 +635,8 @@ async def get_status(refresh_price: bool = True, refresh_balance: bool = True):
         else:
             price_diff = pos.avg_price - current_price
         unrealized_pnl = price_diff * pos.total_size * ct_val
-        pnl_rate = price_diff / pos.avg_price * 100
+        leverage = _state.strategy.config.leverage
+        pnl_rate = price_diff / pos.avg_price * leverage * 100
 
     return {
         "success": True,

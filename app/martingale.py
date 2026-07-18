@@ -567,7 +567,7 @@ class MartingaleStrategy:
                 price_diff = self.position.avg_price - self.last_price
             ct_val = self.client.get_instrument_spec(self.config.symbol).get('ctVal', 1.0)
             pnl_usdt = price_diff * self.position.total_size * ct_val
-            pnl_rate = price_diff / self.position.avg_price * 100
+            pnl_rate = price_diff / self.position.avg_price * self.config.leverage * 100
             self.logger.info(f"浮动盈亏: {pnl_usdt:.4f} USDT ({pnl_rate:+.2f}%)")
         self.logger.info("-" * 40)
 
@@ -653,7 +653,7 @@ class MartingaleStrategy:
                 price_diff = self.position.avg_price - self.last_price
             ct_val = self.client.get_instrument_spec(self.config.symbol).get('ctVal', 1.0)
             pnl_usdt = price_diff * self.position.total_size * ct_val
-            pnl_rate = price_diff / self.position.avg_price * 100
+            pnl_rate = price_diff / self.position.avg_price * self.config.leverage * 100
             lines.append(f"浮动盈亏: {pnl_usdt:+.4f} USDT ({pnl_rate:+.2f}%)")
             lines.append(f"下次加仓价: {self.get_next_dca_price():.2f}")
             lines.append(f"止盈价格: {self.get_target_profit_price():.2f}")
