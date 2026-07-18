@@ -43,6 +43,7 @@ class Position:
     first_entry_price: float = 0.0     # 首次入场价
     first_entry_time: str = ""         # 首次入场时间
     unrealized_pnl: float = 0.0       # 未实现盈亏
+    margin: float = 0.0              # 当前持仓总保证金(USDT)
     entry_order_ids: List[str] = field(default_factory=list)  # 入场订单ID列表
 
     def is_empty(self) -> bool:
@@ -58,7 +59,8 @@ class Position:
             'dca_count': self.dca_count,
             'first_entry_price': self.first_entry_price,
             'first_entry_time': self.first_entry_time,
-            'unrealized_pnl': self.unrealized_pnl
+            'unrealized_pnl': self.unrealized_pnl,
+            'margin': self.margin
         }
 
 
@@ -287,6 +289,7 @@ class MartingaleStrategy:
             self.position.sizes.append(contract_size)
             self.position.dca_count = 0
             self.position.entry_order_ids.append(order_id)
+            self.position.margin = margin_usdt  # 记录保证金
 
             self.cycle_state = CycleState.POSITION_OPEN
             self.base_price = self.last_price
@@ -364,6 +367,7 @@ class MartingaleStrategy:
             self.position.entry_prices.append(self.last_price)
             self.position.sizes.append(contract_size)
             self.position.entry_order_ids.append(order_id)
+            self.position.margin += margin_usdt  # 累加保证金
             self.last_dca_price = self.last_price
 
             self.cycle_state = CycleState.DCA_IN_PROGRESS

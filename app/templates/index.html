@@ -92,6 +92,18 @@
             <div class="text-sm text-gray-400">盈亏平衡价</div>
             <div id="breakeven" class="text-lg font-medium">--</div>
         </div>
+        <div>
+            <div class="text-sm text-gray-400">保证金</div>
+            <div id="posMargin" class="text-lg font-medium text-warning">--</div>
+        </div>
+        <div>
+            <div class="text-sm text-gray-400">名义价值</div>
+            <div id="posNotional" class="text-lg font-medium">--</div>
+        </div>
+        <div>
+            <div class="text-sm text-gray-400">维持保证金率</div>
+            <div id="posMmr" class="text-lg font-medium">--</div>
+        </div>
     </div>
 </div>
 
@@ -317,6 +329,23 @@
             document.getElementById('nextDcaPrice').textContent = d.strategy.next_dca_price > 0 ? '$' + d.strategy.next_dca_price.toFixed(2) : '--';
             document.getElementById('targetProfit').textContent = '$' + d.strategy.target_profit_price.toFixed(2);
             document.getElementById('breakeven').textContent = '$' + d.strategy.breakeven_price.toFixed(2);
+
+            // 保证金 / 名义价值 / 杠杆倍数
+            const margin = d.position.margin || 0;
+            const notional = d.position.notional || 0;
+            const mmrRate = d.position.mmr_rate || 0;
+            document.getElementById('posMargin').textContent = margin > 0 ? margin.toFixed(2) + ' USDT' : '--';
+            document.getElementById('posNotional').textContent = notional > 0 ? notional.toFixed(2) + ' USDT' : '--';
+            const mmrEl = document.getElementById('posMmr');
+            if (mmrRate > 0) {
+                // live 模式：显示 OKX 返回的维持保证金率（%）
+                mmrEl.textContent = mmrRate.toFixed(4) + '%';
+            } else if (margin > 0 && notional > 0) {
+                // 模拟盘：显示杠杆倍数
+                mmrEl.textContent = (notional / margin).toFixed(1) + 'x';
+            } else {
+                mmrEl.textContent = '--';
+            }
 
             // 浮动盈亏
             const pnlEl = document.getElementById('unrealizedPnl');

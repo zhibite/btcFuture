@@ -440,6 +440,7 @@ def initialize_trading():
             _state.strategy.position.dca_count = int(saved_position.get('dca_count', 0))
             _state.strategy.position.first_entry_price = float(saved_position.get('first_entry_price', 0))
             _state.strategy.position.first_entry_time = saved_position.get('first_entry_time', '')
+            _state.strategy.position.margin = float(saved_position.get('margin', 0))
             # last_dca_price 必须同步恢复，否则 get_next_dca_price() 会算出"从 0 跌 0.8%"的错位
             _state.strategy.last_dca_price = float(
                 saved_position.get('last_dca_price', saved_position.get('avg_price', 0))
@@ -638,6 +639,31 @@ async def get_status(refresh_price: bool = True, refresh_balance: bool = True):
         leverage = _state.strategy.config.leverage
         pnl_rate = price_diff / pos.avg_price * leverage * 100
 
+    # ---------- 保证金 / 名义价值 / 杠杆倍数 ----------
+    pos_margin = pos.margin if not pos.is_empty() else 0
+    pos_notional = 0.0
+    pos_leverage_ratio = 0.0
+    if not pos.is_empty() and current_price > 0:
+        # 名义价值 = 张数 × ctVal × 当前价格
+        pos_notional = pos.total_size * ct_val * current_price
+        if pos_margin > 0:
+            pos_leverage_ratio = pos_notional / pos_margin
+    # 尝试从 OKX 持仓接口拉取真实 MMR（live 模式）
+    okx_mmr_rate = 0.0
+    if api_ok and not pos.is_empty():
+        try:
+            okx_positions = _state.client.get_position(_state.strategy.config.symbol)
+            for p in okx_positions:
+                if float(p.get('pos', '0') or 0) != 0:
+                    okx_mmr_rate = float(p.get('maintMarginRatio', '0') or 0) * 100
+                    # 用 OKX 返回的真实保证金替换本地估算值（如果有）
+                    okx_margin = float(p.get('margin', '0') or 0)
+                    if okx_margin > 0:
+                        pos_margin = okx_margin
+                    break
+        except Exception:
+            pass
+
     return {
         "success": True,
         "timestamp": datetime.now().isoformat(),
@@ -655,7 +681,10 @@ async def get_status(refresh_price: bool = True, refresh_balance: bool = True):
             "avg_price": pos.avg_price,
             "dca_count": pos.dca_count,
             "first_entry_price": pos.first_entry_price,
-            "first_entry_time": pos.first_entry_time
+            "first_entry_time": pos.first_entry_time,
+            "margin": pos_margin,
+            "notional": pos_notional,
+            "mmr_rate": okx_mmr_rate if okx_mmr_rate > 0 else pos_leverage_ratio,
         } if not pos.is_empty() else None,
         "unrealized_pnl": unrealized_pnl,
         "pnl_rate": pnl_rate,
