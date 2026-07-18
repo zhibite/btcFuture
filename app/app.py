@@ -995,7 +995,7 @@ async def action_sync_position():
 
     symbol = _state.strategy.config.symbol
     try:
-        positions = _state.client.get_positions(symbol)
+        positions = _state.client.get_position(symbol)
     except Exception as e:
         if _app_logger:
             _app_logger.error(f"[SYNC] 拉 OKX 持仓失败：{e}")
