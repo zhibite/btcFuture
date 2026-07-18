@@ -103,7 +103,7 @@ def is_authenticated(request: Request) -> bool:
 def _resolve_current_price(symbol: str) -> tuple[float, str]:
     """按当前 mode 解析当下应该使用的价格 + 数据源。
 
-    - live 模式：去 OKX /api/v5/market/ticker 拉真实 ticker；拿不到再退到本地 SimulatedMarket
+    - live 模式：去 OKX /api/v5/market/ticker 拉真实 ticker；拿不到返回 0
     - simulation 模式：直接用本地 SimulatedMarket（被 /api/simulate 推动）
     - 都拿不到：返回 (0.0, 'unavailable')
 
@@ -117,7 +117,8 @@ def _resolve_current_price(symbol: str) -> tuple[float, str]:
                 return px, 'okx'
         except Exception as e:
             if _app_logger:
-                _app_logger.warning(f"[PRICE] live 模式拉 OKX 价格失败：{e}，回落到 simulated")
+                _app_logger.warning(f"[PRICE] live 模式拉 OKX 价格失败：{e}")
+        return 0.0, 'unavailable'
     if _state.market:
         return _state.market.get_price(), 'simulated'
     return 0.0, 'unavailable'
@@ -574,21 +575,16 @@ async def get_status(refresh_price: bool = True, refresh_balance: bool = True):
                 if px and px > 0:
                     current_price = px
                     price_source = 'okx'
-                elif _state.market:
-                    current_price = _state.market.get_price()
-                    price_source = 'simulated_fallback'
                 else:
                     current_price = 0.0
                     price_source = 'unavailable'
             except Exception as e:
                 print(f"获取 OKX 价格失败: {e}")
-                current_price = _state.market.get_price() if _state.market else 0.0
+                current_price = 0.0
                 price_source = 'error'
     else:
-        if _state.market:
-            current_price = _state.market.get_price()
-        else:
-            current_price = 0.0
+        current_price = 0.0
+        price_source = 'unknown'
 
     # ---------- 余额 ----------
     balance = _state.client.cached_balance or 0
