@@ -384,14 +384,21 @@ class OKXClient:
         result = self._request('GET', path, params=params)
 
         if result.get('code') == '0':
-            return result['data'][0] if result['data'] else None
+            if result['data']:
+                return result['data'][0]
+            logger.warning(f"[TICKER] {symbol} OKX returned code=0 but data is empty")
+            return None
+        logger.warning(f"[TICKER] {symbol} OKX ticker failed: code={result.get('code')} msg={result.get('msg')}")
         return None
 
     def get_current_price(self, symbol: str) -> float:
         """获取当前市场价格"""
         ticker = self.get_ticker(symbol)
         if ticker:
-            return float(ticker.get('last', '0'))
+            px = float(ticker.get('last', '0'))
+            if px == 0:
+                logger.warning(f"[TICKER] {symbol} get_ticker returned but last=0, instData={ticker}")
+            return px
         return 0.0
 
     def get_position(self, symbol: str) -> List[Dict[str, Any]]:
