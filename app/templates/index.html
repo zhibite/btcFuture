@@ -223,7 +223,7 @@
             const px = Number(d.price);
             const priceSource = d.price_source || d.priceSource || '';
             // simulated 价格加明显标识，避免误判为 OKX 真实行情
-            const isFake = (priceSource === 'simulated' || priceSource === 'default' || priceSource === 'simulated_fallback');
+            const isFake = (priceSource === 'simulated' || priceSource === 'default' || priceSource === 'simulated_fallback' || priceSource === 'uninitialized');
             const priceLabel = isFake ? ('$' + px.toFixed(2) + '  (模拟)') : '$' + px.toFixed(2);
             document.getElementById('currentPrice').textContent = priceLabel;
             document.getElementById('currentPrice').className = 'text-2xl font-bold ' + (isFake ? 'text-yellow-400' : 'text-white');

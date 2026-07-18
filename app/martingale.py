@@ -483,7 +483,7 @@ class MartingaleStrategy:
             net_profit = profit - fee
 
             self.recorder.record_trade(
-                trade_type='stop_loss' if stop_loss else 'close',
+                trade_type='stop_loss',
                 symbol=self.config.symbol,
                 side=self._get_close_side(),
                 size=self.position.total_size,

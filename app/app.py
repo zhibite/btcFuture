@@ -564,8 +564,10 @@ async def get_status(refresh_price: bool = True, refresh_balance: bool = True):
                 current_price = _state.market.get_price()
                 price_source = 'simulated'
             else:
-                current_price = 65000.0
-                price_source = 'default'
+                if _app_logger:
+                    _app_logger.warning("[STATUS] _state.market is None, returning price=0")
+                current_price = 0.0
+                price_source = 'uninitialized'
         else:
             try:
                 px = _state.client.get_current_price(symbol)
@@ -691,14 +693,21 @@ async def get_trades():
     """获取交易记录"""
     db = get_db()
 
-    # 尝试从数据库获取
-    trades = db.get_trades()
-    summary = db.get_trades_summary()
-
-    # 如果数据库为空，尝试从内存获取
-    if not trades and _state.strategy:
+    # 优先从内存获取（实时、包含最新统计数据）
+    if _state.strategy:
         trades = _state.strategy.recorder.trades
-        summary = _state.strategy.recorder.get_summary()
+        stats = _state.strategy.stats
+        summary = {
+            'total_trades': stats.get('total_cycles', 0),
+            'profit_trades': stats.get('profit_cycles', 0),
+            'loss_trades': stats.get('loss_cycles', 0),
+            'total_profit': stats.get('total_profit', 0.0),
+            'total_loss': stats.get('total_loss', 0.0),
+            'net_profit': stats.get('total_profit', 0.0) - stats.get('total_loss', 0.0),
+        }
+    else:
+        trades = db.get_trades()
+        summary = db.get_trades_summary()
 
     return {
         "success": True,
@@ -1076,6 +1085,39 @@ async def action_sync_position():
     }
 
 
+@app.post("/api/position/clear", dependencies=[Depends(require_login)])
+async def action_clear_position():
+    """只清掉本地持仓（不改变余额和统计）。
+
+    用于：OKX 上手动平仓了，想让本地也保持同步清空。
+    不影响余额、统计数据、交易记录。
+    """
+    if not _state.strategy:
+        return {"success": False, "message": "策略未初始化"}
+
+    pos = _state.strategy.position
+    if pos.is_empty():
+        return {"success": True, "message": "本地已无持仓，无需清理"}
+
+    avg = pos.avg_price
+    size = pos.total_size
+    side = pos.side.value if hasattr(pos.side, 'value') else pos.side
+
+    if _state.strategy_task_lock is None:
+        _state.strategy_task_lock = asyncio.Lock()
+    async with _state.strategy_task_lock:
+        _state.strategy._reset_position()
+
+    save_state()
+
+    if _app_logger:
+        _app_logger.warning(
+            f"[CLEAR] 手动清掉本地持仓: 方向={side} 张数={size:.4f} 均价={avg:.2f}"
+        )
+
+    return {"success": True, "message": f"已清掉本地持仓（方向={side} 张数={size:.4f} 均价={avg:.2f}）"}
+
+
 @app.post("/api/action/reset", dependencies=[Depends(require_login)])
 async def action_reset():
     """重置余额"""
@@ -1155,8 +1197,8 @@ async def simulate_price(action: str = Form(...)):
     if _state.strategy_task_lock is None:
         _state.strategy_task_lock = asyncio.Lock()
     async with _state.strategy_task_lock:
-        # 运行策略逻辑
-        _state.strategy.run_one_cycle()
+        # 运行策略逻辑（external_price 让 run_one_cycle 直接用传入的模拟价格）
+        _state.strategy.run_one_cycle(external_price=new_price)
 
     # 保存状态
     save_state()
@@ -1337,8 +1379,16 @@ async def _strategy_loop():
                 async with _state.strategy_task_lock:
                     if not _state.strategy or not _state.client:
                         continue
+                    symbol = _state.strategy.config.symbol
+                    price, _ = _resolve_current_price(symbol)
+                    if price > 0:
+                        _state.strategy.last_price = price
                     _state.strategy.run_one_cycle()
             else:
+                symbol = _state.strategy.config.symbol
+                price, _ = _resolve_current_price(symbol)
+                if price > 0:
+                    _state.strategy.last_price = price
                 _state.strategy.run_one_cycle()
 
             interval = _state.config.get('CHECK_INTERVAL', 2) or 2

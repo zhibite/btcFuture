@@ -371,7 +371,7 @@ class TradeRecorder:
                     side: str, size: float, price: float,
                     pnl: float = 0.0, fee: float = 0.0):
         """
-        记录一笔交易
+        记录一笔交易（内存 + 数据库双写）
 
         Args:
             trade_type: 交易类型 (open, add, close, stop_loss)
@@ -395,6 +395,23 @@ class TradeRecorder:
         }
         self.trades.append(trade)
         self._update_stats(trade)
+
+        # 同时写入数据库（延迟导入避免循环依赖）
+        try:
+            from database import get_db
+            db = get_db()
+            db.add_trade(
+                trade_type=trade_type,
+                symbol=symbol,
+                side=side,
+                size=size,
+                price=price,
+                pnl=pnl,
+                fee=fee
+            )
+        except Exception:
+            # 数据库写入失败不影响主流程
+            pass
 
     def _update_stats(self, trade: Dict):
         """更新统计数据"""
