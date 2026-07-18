@@ -1318,7 +1318,7 @@ async def websocket_endpoint(websocket: WebSocket):
             if now - last_full >= 5:
                 last_full = now
                 try:
-                    full = await get_status(refresh_price=False, refresh_balance=True)
+                    full = await get_status(refresh_price=True, refresh_balance=True)
                     full["type"] = "full"
                     await websocket.send_json(full)
                 except WebSocketDisconnect:
