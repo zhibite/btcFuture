@@ -110,7 +110,7 @@
                         <label class="block text-sm text-gray-400 mb-1">价格间隔 (%)</label>
                         <input type="number" name="price_interval" id="price_interval" value="0.8" min="0.1" max="5" step="0.1"
                             class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:border-primary focus:outline-none">
-                        <div class="text-xs text-gray-500 mt-1">按价格跌幅触发，建议: 0.8%</div>
+                        <div class="text-xs text-gray-500 mt-1">按价格跌幅触发（与杠杆无关），建议 0.8%。注意：浮亏 = 价格跌幅 × 杠杆。</div>
                     </div>
 
                     <div class="col-span-2">
@@ -129,9 +129,9 @@
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm text-gray-400 mb-1">止盈目标 (%)</label>
-                        <input type="number" name="take_profit" id="take_profit" value="2" min="0.5" max="10" step="0.1"
+                        <input type="number" name="take_profit" id="take_profit" value="1.2" min="0.5" max="10" step="0.1"
                             class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:border-primary focus:outline-none">
-                        <div class="text-xs text-gray-500 mt-1">建议: 2-3%，覆盖手续费</div>
+                        <div class="text-xs text-gray-500 mt-1">按价格涨幅触发（与杠杆无关）；2x 杠杆下 1.2%≈浮盈 2.4%。建议 1-2%。</div>
                     </div>
 
                     <div>
@@ -271,7 +271,7 @@ function fillForm(config) {
     document.getElementById('multiplier').value = config.MULTIPLIER || 1.5;
     document.getElementById('price_interval').value = (config.PRICE_INTERVAL * 100) || 0.8;
     document.getElementById('max_dca_count').value = config.MAX_DCA_COUNT || 7;
-    document.getElementById('take_profit').value = (config.TAKE_PROFIT * 100) || 2;
+    document.getElementById('take_profit').value = (config.TAKE_PROFIT * 100) || 1.2;
     document.getElementById('max_loss_rate').value = (config.MAX_LOSS_RATE * 100) || 25;
     document.getElementById('auto_loop').checked = config.AUTO_LOOP || false;
     const direction = config.DIRECTION || 'long';
@@ -286,7 +286,7 @@ function fillForm(config) {
     document.getElementById('multiplier').value = 1.5;
     document.getElementById('price_interval').value = 0.8;
     document.getElementById('max_dca_count').value = 7;
-    document.getElementById('take_profit').value = 2;
+    document.getElementById('take_profit').value = 1.2;
     document.getElementById('max_loss_rate').value = 25;
     document.getElementById('auto_loop').checked = false;
     document.getElementById('direction_long').checked = true;

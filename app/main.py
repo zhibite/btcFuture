@@ -61,7 +61,7 @@ class TradingBot:
             'MULTIPLIER': 1.5,
             'PRICE_INTERVAL': 0.008,
             'MAX_DCA_COUNT': 7,
-            'TAKE_PROFIT': 0.02,
+            'TAKE_PROFIT': 0.012,
             'MAX_LOSS_RATE': 0.25,
             'TREND_PAUSE_RATE': 0.05,
             'TOTAL_CAPITAL': 2000,
@@ -131,7 +131,7 @@ class TradingBot:
             multiplier=self.config.get('MULTIPLIER', 1.5),
             price_interval=self.config.get('PRICE_INTERVAL', 0.008),
             max_dca_count=self.config.get('MAX_DCA_COUNT', 7),
-            take_profit=self.config.get('TAKE_PROFIT', 0.02),
+            take_profit=self.config.get('TAKE_PROFIT', 0.012),
             symbol=self.config.get('SYMBOL', 'BTC-USDT-SWAP'),
             auto_loop=self.config.get('AUTO_LOOP', False)
         )
@@ -481,7 +481,7 @@ def main():
             multiplier=1.5,
             price_interval=0.008,
             max_dca_count=7,
-            take_profit=0.02
+            take_profit=0.012
         )
 
         print("开始回测...")

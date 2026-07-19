@@ -72,7 +72,7 @@ class MartingaleConfig:
     multiplier: float = 1.5           # 加仓倍数
     price_interval: float = 0.008     # 价格间隔 (0.8%)
     max_dca_count: int = 7            # 最大加仓次数
-    take_profit: float = 0.02         # 止盈目标 (2%)
+    take_profit: float = 0.012        # 止盈目标 (1.2%，价格涨幅，杠杆无关；2x杠杆下≈浮盈2.4%)
     symbol: str = "BTC-USDT-SWAP"     # 交易对
     auto_loop: bool = False           # 自动循环
     direction: str = "long"            # 交易方向: long=做多, short=做空
