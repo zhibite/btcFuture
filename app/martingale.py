@@ -289,7 +289,11 @@ class MartingaleStrategy:
             self.position.sizes.append(contract_size)
             self.position.dca_count = 0
             self.position.entry_order_ids.append(order_id)
-            self.position.margin = margin_usdt  # 记录保证金
+            # 模拟盘用估算保证金，live 盘开仓后由 get_status 从 OKX 拉取真实值覆盖
+            if not self.client.simulation:
+                self.position.margin = 0  # 等待 OKX 回调写入
+            else:
+                self.position.margin = margin_usdt
 
             self.cycle_state = CycleState.POSITION_OPEN
             self.base_price = self.last_price
@@ -367,7 +371,11 @@ class MartingaleStrategy:
             self.position.entry_prices.append(self.last_price)
             self.position.sizes.append(contract_size)
             self.position.entry_order_ids.append(order_id)
-            self.position.margin += margin_usdt  # 累加保证金
+            # 模拟盘用估算保证金累加，live 盘开仓后由 get_status 从 OKX 拉取真实值覆盖
+            if not self.client.simulation:
+                pass  # 等待 OKX 回调
+            else:
+                self.position.margin += margin_usdt
             self.last_dca_price = self.last_price
 
             self.cycle_state = CycleState.DCA_IN_PROGRESS

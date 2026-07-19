@@ -487,6 +487,7 @@ def save_state():
             'dca_count': pos.dca_count,
             'first_entry_price': pos.first_entry_price,
             'first_entry_time': pos.first_entry_time,
+            'margin': pos.margin,
             'last_dca_price': _state.strategy.last_dca_price,
             'base_price': _state.strategy.base_price,
         })
@@ -650,16 +651,21 @@ async def get_status(refresh_price: bool = True, refresh_balance: bool = True):
             pos_leverage_ratio = pos_notional / pos_margin
     # 尝试从 OKX 持仓接口拉取真实 MMR（live 模式）
     okx_mmr_rate = 0.0
+    okx_margin_from_api = 0.0
     if api_ok and not pos.is_empty():
         try:
             okx_positions = _state.client.get_position(_state.strategy.config.symbol)
             for p in okx_positions:
                 if float(p.get('pos', '0') or 0) != 0:
-                    okx_mmr_rate = float(p.get('maintMarginRatio', '0') or 0) * 100
-                    # 用 OKX 返回的真实保证金替换本地估算值（如果有）
-                    okx_margin = float(p.get('margin', '0') or 0)
-                    if okx_margin > 0:
-                        pos_margin = okx_margin
+                    okx_margin_from_api = float(p.get('margin', '0') or 0)
+                    raw_mmr = float(p.get('maintMarginRatio', '0') or 0)
+                    if raw_mmr > 0:
+                        okx_mmr_rate = raw_mmr * 100
+                    elif okx_margin_from_api > 0 and pos_notional > 0:
+                        # maintMarginRatio 未返回时，用 margin/notional 反推杠杆比
+                        okx_mmr_rate = okx_margin_from_api / pos_notional * 100
+                    if okx_margin_from_api > 0:
+                        pos_margin = okx_margin_from_api
                     break
         except Exception:
             pass
