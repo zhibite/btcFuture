@@ -374,7 +374,7 @@ class TradeRecorder:
         记录一笔交易（内存 + 数据库双写）
 
         Args:
-            trade_type: 交易类型 (open, add, close, stop_loss)
+            trade_type: 交易类型 (open, add, close, take_profit, stop_loss)
             symbol: 交易对
             side: 买卖方向
             size: 数量

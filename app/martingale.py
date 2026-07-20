@@ -497,8 +497,12 @@ class MartingaleStrategy:
             fee = self.position.total_size * ct_val * self.last_price * 0.0005 * 2
             net_profit = profit - fee
 
+            # 区分平仓类型：止损 / 止盈 / 普通平仓。避免之前一律写 'stop_loss'，
+            # 导致止盈等盈利单被错误标记成止损。
+            close_type = 'stop_loss' if stop_loss else ('take_profit' if net_profit > 0 else 'close')
+
             self.recorder.record_trade(
-                trade_type='stop_loss',
+                trade_type=close_type,
                 symbol=self.config.symbol,
                 side=self._get_close_side(),
                 size=self.position.total_size,

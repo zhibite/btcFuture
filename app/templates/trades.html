@@ -90,10 +90,12 @@
             tbody.innerHTML = data.trades.map(trade => {
                 const typeClass = trade.type === 'open' ? 'bg-blue-500' :
                                  trade.type === 'add' ? 'bg-yellow-500' :
-                                 trade.type === 'close' ? 'bg-green-500' :
+                                 trade.type === 'take_profit' ? 'bg-green-600' :
+                                 trade.type === 'close' ? 'bg-gray-500' :
                                  trade.type === 'stop_loss' ? 'bg-red-500' : 'bg-gray-500';
                 const typeText = trade.type === 'open' ? '开仓' :
                                 trade.type === 'add' ? '加仓' :
+                                trade.type === 'take_profit' ? '止盈' :
                                 trade.type === 'close' ? '平仓' :
                                 trade.type === 'stop_loss' ? '止损' : trade.type;
 
