@@ -9,11 +9,11 @@ import logging
 import signal
 import yaml
 from typing import Optional
-from datetime import datetime
 
 from okx_client import OKXClient
 from risk_manager import RiskManager, RiskConfig, RiskLevel
 from martingale import MartingaleStrategy, MartingaleConfig, SimulatedMarket
+from time_utils import format_ts
 
 
 class TradingBot:
@@ -204,7 +204,7 @@ class TradingBot:
         """打印状态信息"""
         pos = self.strategy.position
         self.logger.info("-" * 50)
-        self.logger.info(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.info(f"时间: {format_ts()}")
         self.logger.info(f"BTC价格: ${price:.2f}")
         self.logger.info(f"账户余额: {balance:.2f} USDT")
 

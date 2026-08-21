@@ -8,6 +8,7 @@ import sys
 import time
 import yaml
 import asyncio
+from datetime import datetime
 from typing import Optional, Dict, Any
 from pathlib import Path
 
@@ -27,6 +28,28 @@ from database import Database, get_db
 from time_utils import format_ts, iso_bj
 
 import logging
+
+
+def _iso_to_display_ts(iso_str: str) -> str:
+    """把 DB 里的 ISO 时间戳转成 'YYYY-MM-DD HH:MM:SS' 显示。
+
+    兼容新旧两种格式：
+    - 旧: '2026-08-21T11:48:00.123456'           （naive，UTC 写入但无标记）
+    - 新: '2026-08-21T19:48:00.123456+08:00'     （aware，带偏移）
+
+    旧记录按 UTC 解读（保持与写入时一致），新记录带 +08:00 标记按其原样取本地时间。
+    这样历史数据不会显示错乱。
+    """
+    if not iso_str:
+        return ''
+    try:
+        # Python 3.7+ 支持 fromisoformat；3.11+ 完美处理 'Z' 后缀和微秒
+        dt = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
+    except (ValueError, TypeError):
+        # 兜底：截取前 19 字符并把 'T' 换成 ' '
+        s = iso_str[:19].replace('T', ' ')
+        return s
+    return dt.strftime('%Y-%m-%d %H:%M:%S')
 
 
 # ============ 日志（输出到 stderr，docker logs -f 可直接看到） ============
@@ -754,7 +777,28 @@ async def get_trades():
             'net_profit': stats.get('total_profit', 0.0) - stats.get('total_loss', 0.0),
         }
     else:
-        trades = db.get_trades()  # 数据库层已 ORDER BY id DESC
+        # DB 路径下 row 字段是 trade_type / created_at，前端模板按内存字段名
+        # （type / timestamp）渲染。这里做归一化，让两条路径的返回 schema 一致。
+        raw = db.get_trades()  # 数据库层已 ORDER BY id DESC
+        trades = [
+            {
+                'id': r.get('id'),
+                'type': r.get('trade_type'),
+                'symbol': r.get('symbol'),
+                'side': r.get('side'),
+                'size': r.get('size'),
+                'price': r.get('price'),
+                'pnl': r.get('pnl'),
+                # 内存字典里 net_pnl = pnl - fee。DB 里 fee 单独存，所以这里重新减一遍，
+                # 让前端展示与内存记录语义一致。
+                'net_pnl': (r.get('pnl') or 0) - (r.get('fee') or 0),
+                'fee': r.get('fee'),
+                # 前端直接展示，'YYYY-MM-DD HH:MM:SS' 形式更易读；
+                # DB 里是 ISO 带 T 的字符串（带或不带 +08:00 都兼容）。
+                'timestamp': _iso_to_display_ts(r.get('created_at')),
+            }
+            for r in raw
+        ]
         summary = db.get_trades_summary()
 
     return {

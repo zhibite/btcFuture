@@ -1,18 +1,21 @@
 """统一时间工具：显式使用 Asia/Shanghai (UTC+8) 时区，避免依赖容器/系统时区。
 
-所有展示给用户的时间戳（交易记录 / 每日聚合键）必须走这里。
+设计原则：用 fixed +8 偏移（timezone(timedelta(hours=8))）而不是 ZoneInfo，
+原因：
+  1. ZoneInfo 在 Debian slim / alpine 镜像里需要系统 tzdata，否则抛 ZoneInfoNotFoundError
+  2. 北京时间相对 UTC 的偏移是恒定的 +8（中国不实行夏令时），不需要查数据库
+  3. 行为完全确定，不依赖 /usr/share/zoneinfo 或 Python tzdata 包是否安装
+
+所有展示给用户的时间戳（交易记录 / 每日聚合键 / API timestamp）必须走这里。
 """
-from datetime import datetime
-try:
-    from zoneinfo import ZoneInfo  # Python 3.9+
-    BJ_TZ = ZoneInfo("Asia/Shanghai")
-except ImportError:  # 兜底：旧版本 / 容器异常时退化到固定 +8 偏移
-    from datetime import timezone, timedelta
-    BJ_TZ = timezone(timedelta(hours=8))
+from datetime import datetime, timezone, timedelta
+
+# 固定 +8 偏移，不随夏令时变化（中国 1991 年起永久 UTC+8）。
+BJ_TZ = timezone(timedelta(hours=8), name="Asia/Shanghai")
 
 
 def now_bj() -> datetime:
-    """返回带时区的当前北京时间（aware datetime, Asia/Shanghai）。"""
+    """返回带时区的当前北京时间（aware datetime, +08:00）。"""
     return datetime.now(BJ_TZ)
 
 

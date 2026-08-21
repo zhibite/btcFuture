@@ -8,7 +8,6 @@ import logging
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
 from enum import Enum
-from datetime import datetime
 
 from time_utils import format_ts
 
