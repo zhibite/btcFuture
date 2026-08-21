@@ -7,9 +7,10 @@ import sqlite3
 import json
 import os
 from typing import Optional, Dict, Any, List
-from datetime import datetime
 from pathlib import Path
 from contextlib import contextmanager
+
+from time_utils import iso_bj
 
 
 class Database:
@@ -100,7 +101,7 @@ class Database:
             ''')
             cursor.execute(
                 'INSERT OR IGNORE INTO schema_meta (key, value, updated_at) VALUES (?, ?, ?)',
-                ('version', '0', datetime.now().isoformat())
+                ('version', '0', iso_bj())
             )
 
         # 迁移：把旧 balance 表（单行 id=1）按当前激活 mode 复制到 balance_v2
@@ -124,7 +125,7 @@ class Database:
             if not has_old:
                 cursor.execute(
                     "UPDATE schema_meta SET value=?, updated_at=? WHERE key='version'",
-                    ('2', datetime.now().isoformat())
+                    ('2', iso_bj())
                 )
                 return
 
@@ -146,13 +147,13 @@ class Database:
                 cursor.execute(
                     'INSERT OR IGNORE INTO balance_v2 (mode, balance, initial_balance, updated_at) '
                     'VALUES (?, ?, ?, ?)',
-                    (mode, old['balance'], old['initial_balance'], datetime.now().isoformat())
+                    (mode, old['balance'], old['initial_balance'], iso_bj())
                 )
 
             cursor.execute('DROP TABLE IF EXISTS balance')
             cursor.execute(
                 "UPDATE schema_meta SET value=?, updated_at=? WHERE key='version'",
-                ('2', datetime.now().isoformat())
+                ('2', iso_bj())
             )
 
     # ============ 配置管理 ============
@@ -175,8 +176,8 @@ class Database:
                 INSERT INTO config (key, value, updated_at)
                 VALUES (?, ?, ?)
                 ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = ?
-            ''', (key, json.dumps(value), datetime.now().isoformat(),
-                  json.dumps(value), datetime.now().isoformat()))
+            ''', (key, json.dumps(value), iso_bj(),
+                  json.dumps(value), iso_bj()))
 
     def get_all_config(self) -> Dict[str, Any]:
         """获取所有配置"""
@@ -189,7 +190,7 @@ class Database:
         """批量设置配置"""
         with self._get_conn() as conn:
             cursor = conn.cursor()
-            now = datetime.now().isoformat()
+            now = iso_bj()
             for key, value in config.items():
                 cursor.execute('''
                     INSERT INTO config (key, value, updated_at)
@@ -208,7 +209,7 @@ class Database:
             cursor.execute('''
                 INSERT INTO trades (trade_type, symbol, side, size, price, pnl, fee, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (trade_type, symbol, side, size, price, pnl, fee, datetime.now().isoformat()))
+            ''', (trade_type, symbol, side, size, price, pnl, fee, iso_bj()))
             return cursor.lastrowid
 
     def get_trades(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
@@ -264,8 +265,8 @@ class Database:
                 INSERT INTO state (key, value, updated_at)
                 VALUES (?, ?, ?)
                 ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = ?
-            ''', (key, json.dumps(value), datetime.now().isoformat(),
-                  json.dumps(value), datetime.now().isoformat()))
+            ''', (key, json.dumps(value), iso_bj(),
+                  json.dumps(value), iso_bj()))
 
     # ============ 余额管理（按 mode 拆分） ============
 
@@ -299,8 +300,8 @@ class Database:
                 INSERT INTO balance_v2 (mode, balance, initial_balance, updated_at)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(mode) DO UPDATE SET balance = ?, updated_at = ?
-            ''', (mode, balance, initial_balance, datetime.now().isoformat(),
-                  balance, datetime.now().isoformat()))
+            ''', (mode, balance, initial_balance, iso_bj(),
+                  balance, iso_bj()))
 
     def get_initial_balance(self, mode: str = 'simulation') -> float:
         """获取指定模式的初始余额"""

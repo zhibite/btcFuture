@@ -8,6 +8,8 @@ from typing import Optional, Dict, Any
 from dataclasses import dataclass, field
 from enum import Enum
 
+from time_utils import format_ts, format_date
+
 
 class RiskLevel(Enum):
     """风险等级"""
@@ -383,7 +385,7 @@ class TradeRecorder:
             fee: 手续费
         """
         trade = {
-            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'timestamp': format_ts(),
             'type': trade_type,
             'symbol': symbol,
             'side': side,
@@ -425,8 +427,8 @@ class TradeRecorder:
                 self.cycle_stats['total_loss'] += abs(trade['net_pnl'])
                 self.cycle_stats['loss_count'] += 1
 
-        # 更新日统计
-        date = time.strftime('%Y-%m-%d')
+        # 更新日统计（按北京时间切日，容器在 UTC 也不会算错）
+        date = format_date()
         if date not in self.daily_stats:
             self.daily_stats[date] = {
                 'trade_count': 0,
@@ -461,7 +463,7 @@ class TradeRecorder:
     def get_daily_report(self, date: str = None) -> str:
         """获取日报"""
         if date is None:
-            date = time.strftime('%Y-%m-%d')
+            date = format_date()
 
         if date not in self.daily_stats:
             return f"{date} 无交易记录"

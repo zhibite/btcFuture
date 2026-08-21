@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
 
+from time_utils import format_ts
+
 from okx_client import OKXClient
 from risk_manager import RiskManager, RiskConfig, RiskStatus, RiskLevel, TradeRecorder
 
@@ -284,7 +286,7 @@ class MartingaleStrategy:
             self.position.total_size = contract_size
             self.position.avg_price = self.last_price
             self.position.first_entry_price = self.last_price
-            self.position.first_entry_time = time.strftime('%Y-%m-%d %H:%M:%S')
+            self.position.first_entry_time = format_ts()
             self.position.entry_prices.append(self.last_price)
             self.position.sizes.append(contract_size)
             self.position.dca_count = 0

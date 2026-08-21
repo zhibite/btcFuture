@@ -8,7 +8,6 @@ import sys
 import time
 import yaml
 import asyncio
-from datetime import datetime
 from typing import Optional, Dict, Any
 from pathlib import Path
 
@@ -25,6 +24,7 @@ from okx_client import OKXClient
 from risk_manager import RiskManager, RiskConfig
 from martingale import MartingaleStrategy, MartingaleConfig, SimulatedMarket
 from database import Database, get_db
+from time_utils import format_ts, iso_bj
 
 import logging
 
@@ -686,7 +686,7 @@ async def get_status(refresh_price: bool = True, refresh_balance: bool = True):
 
     return {
         "success": True,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": iso_bj(),
         "mode": mode,
         "simulation": mode == 'simulation',
         "price": float(current_price or 0),
@@ -1101,7 +1101,7 @@ async def action_sync_position():
         pos.total_size = abs(okx_pos)
         pos.avg_price = okx_avg
         pos.first_entry_price = okx_avg
-        pos.first_entry_time = pos.first_entry_time or time.strftime('%Y-%m-%d %H:%M:%S')
+        pos.first_entry_time = pos.first_entry_time or format_ts()
 
         # dca_count：从 entry_prices 推算；如果列表为空（典型首单）则按 0 处理
         # 同时用 OKX 创建时间辅助判断：entry_prices 元素数 - 1 表示已加仓的次数
