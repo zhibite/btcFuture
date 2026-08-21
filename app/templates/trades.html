@@ -75,11 +75,15 @@
     }
 
     function updateTrades(data) {
-        // 更新摘要
-        const sum = data.summary;
-        document.getElementById('sumTotal').textContent = sum.closed_trades || 0;
-        document.getElementById('sumProfit').textContent = sum.win_count || 0;
-        document.getElementById('sumLoss').textContent = sum.loss_count || 0;
+        // 更新摘要。summary 在内存路径下字段为 total_trades/profit_trades/loss_trades，
+        // 兼容旧的 closed_trades/win_count/loss_count 命名。
+        const sum = data.summary || {};
+        const total = sum.total_trades ?? sum.closed_trades ?? 0;
+        const profit = sum.profit_trades ?? sum.win_count ?? 0;
+        const loss = sum.loss_trades ?? sum.loss_count ?? 0;
+        document.getElementById('sumTotal').textContent = total || 0;
+        document.getElementById('sumProfit').textContent = profit || 0;
+        document.getElementById('sumLoss').textContent = loss || 0;
 
         const winRate = sum.win_rate ? (sum.win_rate * 100).toFixed(1) : '0';
         document.getElementById('sumWinRate').textContent = winRate + '%';

@@ -82,23 +82,40 @@
             }
         }
 
-        async function updateNavPrice() {
-            try {
-                // 优先从 window 全局缓存读取（由 index.html 的 WebSocket 实时更新）
-                if (window.__btcPrice !== undefined) {
-                    document.getElementById('navPrice').textContent = 'BTC: $' + Number(window.__btcPrice).toFixed(2);
-                    return;
-                }
-                const res = await fetch('/api/status');
-                const data = await res.json();
-                document.getElementById('navPrice').textContent = 'BTC: $' + Number(data.price || 0).toFixed(2);
-                if (data.mode) updateModeDisplay(data.mode);
-            } catch (e) {
-                console.log('Failed to update price');
+    async function updateNavPrice() {
+        try {
+            // 优先从 window 全局缓存读取（由 index.html 的 WebSocket 实时更新）
+            if (window.__btcPrice !== undefined) {
+                document.getElementById('navPrice').textContent = 'BTC: $' + Number(window.__btcPrice).toFixed(2);
+                return;
             }
+            const res = await fetch('/api/status');
+            const data = await res.json();
+            document.getElementById('navPrice').textContent = 'BTC: $' + Number(data.price || 0).toFixed(2);
+            if (data.mode) updateModeDisplay(data.mode);
+            // 顶栏徽章统一在 base.html 维护，避免每个子页面各自实现
+            if (typeof data.paused === 'boolean') updateNavRunStatus(data.paused);
+        } catch (e) {
+            console.log('Failed to update price');
         }
-        updateNavPrice();
-        setInterval(updateNavPrice, 10000);
+    }
+    updateNavPrice();
+    setInterval(updateNavPrice, 10000);
+
+    // 顶栏策略状态徽章。trades / config / index 任何页面切换后都会被 updateNavPrice 拉一次。
+    // index.html 的 WebSocket tick 路径则走 window.__btcPrice 直接返回，状态徽章由
+    // index 的 updateStrategyRunUI 维护。其它页面（trades.html）走这里轮询。
+    function updateNavRunStatus(paused) {
+        const nav = document.getElementById('navStatus');
+        if (!nav) return;
+        if (paused) {
+            nav.textContent = '已暂停';
+            nav.className = 'px-2 py-1 text-xs rounded bg-orange-600';
+        } else {
+            nav.textContent = '运行中';
+            nav.className = 'px-2 py-1 text-xs rounded bg-success';
+        }
+    }
     </script>
     {% block scripts %}{% endblock %}
 </body>

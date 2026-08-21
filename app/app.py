@@ -75,6 +75,9 @@ class TradeState:
         self.strategy: Optional[MartingaleStrategy] = None
         self.market: Optional[SimulatedMarket] = None
         self.running = False
+        # 暂停标志：True 表示后台 _strategy_loop 不跑 run_one_cycle。
+        # 持久化到 db.state['strategy_paused']，重启不丢。手动改这里不会持久化，请走 API。
+        self.paused: bool = False
         self.config: Dict[str, Any] = {}
         self.trades: list = []
         self.last_update = time.time()
@@ -267,6 +270,17 @@ def initialize_trading():
     db = get_db()
     mode = get_active_mode()
     config = load_mode_config(mode)
+
+    # 恢复持久化的"策略暂停"标志（重启服务不丢状态）。
+    # 首次启动或 key 不存在时默认 False（运行中）。
+    try:
+        saved_paused = db.get_state('strategy_paused')
+        if saved_paused is None:
+            _state.paused = False
+        else:
+            _state.paused = bool(saved_paused)
+    except Exception:
+        _state.paused = False
 
     # 获取数据库中当前 mode 的余额（如果存在）
     saved_balance = db.get_balance(mode=mode)
@@ -708,6 +722,8 @@ async def get_status(refresh_price: bool = True, refresh_balance: bool = True):
             "target_profit_price": _state.strategy.get_target_profit_price(),
             "breakeven_price": _state.strategy.get_breakeven_price()
         },
+        "paused": bool(_state.paused),
+        "strategy_running": not _state.paused,
         "startup_warnings": getattr(_state, 'startup_warnings', []),
         "instrument_spec": getattr(_state.client, '_instrument_specs', {}).get(
             _state.strategy.config.symbol, {}
@@ -727,7 +743,7 @@ async def get_trades():
 
     # 优先从内存获取（实时、包含最新统计数据）
     if _state.strategy:
-        trades = _state.strategy.recorder.trades
+        trades = list(reversed(_state.strategy.recorder.trades))
         stats = _state.strategy.stats
         summary = {
             'total_trades': stats.get('total_cycles', 0),
@@ -738,7 +754,7 @@ async def get_trades():
             'net_profit': stats.get('total_profit', 0.0) - stats.get('total_loss', 0.0),
         }
     else:
-        trades = db.get_trades()
+        trades = db.get_trades()  # 数据库层已 ORDER BY id DESC
         summary = db.get_trades_summary()
 
     return {
@@ -1241,6 +1257,68 @@ async def simulate_price(action: str = Form(...)):
     }
 
 
+# ============ 策略运行控制：暂停 / 恢复 ============
+
+@app.get("/api/strategy/state")
+async def get_strategy_state():
+    """获取策略运行状态（运行中 / 已暂停）。公开接口，前端 navStatus 用。"""
+    return {
+        "success": True,
+        "running": not _state.paused,
+        "paused": bool(_state.paused),
+    }
+
+
+@app.post("/api/strategy/pause", dependencies=[Depends(require_login)])
+async def pause_strategy():
+    """暂停策略。
+
+    语义：
+    - 后台 _strategy_loop 跳过 run_one_cycle（不开仓、不加仓、不止盈、不止损）
+    - 持仓不会被强制平仓
+    - 平仓后不会自动开新仓（即使 AUTO_LOOP=True）
+    - 状态持久化到 state 表，重启服务后仍然暂停
+    """
+    if _state.paused:
+        return {"success": True, "message": "策略已处于暂停状态", "paused": True}
+
+    _state.paused = True
+    try:
+        get_db().set_state('strategy_paused', True)
+    except Exception as e:
+        if _app_logger:
+            _app_logger.warning(f"[PAUSE] 持久化暂停标志失败（不影响内存）：{e}")
+
+    if _app_logger:
+        _app_logger.warning("[PAUSE] 策略已暂停（_strategy_loop 跳过 run_one_cycle）")
+
+    return {"success": True, "message": "策略已暂停", "paused": True}
+
+
+@app.post("/api/strategy/resume", dependencies=[Depends(require_login)])
+async def resume_strategy():
+    """恢复策略。
+
+    - 后台 _strategy_loop 重新跑 run_one_cycle
+    - 若当前 IDLE 且满足条件，会自动开仓
+    - 若当前有持仓，会按当前价继续判断止盈/止损/加仓
+    """
+    if not _state.paused:
+        return {"success": True, "message": "策略已在运行", "paused": False}
+
+    _state.paused = False
+    try:
+        get_db().set_state('strategy_paused', False)
+    except Exception as e:
+        if _app_logger:
+            _app_logger.warning(f"[RESUME] 持久化暂停标志失败（不影响内存）：{e}")
+
+    if _app_logger:
+        _app_logger.info("[RESUME] 策略已恢复")
+
+    return {"success": True, "message": "策略已恢复", "paused": False}
+
+
 # ============ 登录 / 登出 ============
 
 @app.get("/login", response_class=HTMLResponse)
@@ -1394,6 +1472,10 @@ async def _strategy_loop():
     """后台策略循环：每 CHECK_INTERVAL 秒跑一次 run_one_cycle()
 
     与 main.py 的 while self.running 同源，迁移到 asyncio 适配 FastAPI。
+
+    暂停语义：当 _state.paused 为 True 时，本循环 sleep 后继续轮询，但跳过
+    run_one_cycle。这样持仓不会被自动平仓，平仓后也不会自动开新仓；
+    调用方随时可以通过 /api/strategy/resume 恢复。
     """
     # 循环退出标志：app 关闭时会 cancel 这个 task，外部不需要再翻 _state.running
     log = logging.getLogger("StrategyLoop")
@@ -1410,6 +1492,12 @@ async def _strategy_loop():
             if _state.strategy._pending_auto_loop_wait:
                 _state.strategy._pending_auto_loop_wait = False
                 await asyncio.sleep(5)
+
+            # 暂停中：跳过 run_one_cycle，但保留轮询以响应 resume
+            if _state.paused:
+                interval = _state.config.get('CHECK_INTERVAL', 2) or 2
+                await asyncio.sleep(interval)
+                continue
 
             # 加锁，避免跟 initialize_trading / switch_mode 抢资源
             if _state.strategy_task_lock is not None:
